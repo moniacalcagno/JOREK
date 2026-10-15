@@ -4,7 +4,7 @@
 !! initial_conditions; all other missing variables stay zero. If the total temperature T of the file
 !! was stored in T_e (split_T), T_i is taken from its input profile and T_e = T - T_i for n=0, while
 !! the n/=0 harmonics of T are split equally between T_i and T_e. If T_min_neg >= 0, T_e is then raised
-!! by a constant so that its smallest n=0 node value is at least T_min_neg/2.
+!! in import_restart so that its minimum at the Gaussian points is at least T_min_neg/2.
 subroutine init_missing_variables(node_list, var_imported, split_T)
 
 use constants
@@ -138,16 +138,6 @@ if ( split_T ) then
   if ( n_neg > 0 ) then
     write(*,*) 'WARNING: T_e = T - T_i is not positive at ', n_neg, ' nodes (minimum ', T_e_min, ').'
     write(*,*) '         Check that the input T_i profile is below the total temperature T.'
-  end if
-  ! --- Raise T_e by a constant so that its smallest n=0 node value is T_min_neg/2
-  if ( T_min_neg >= 0.d0 ) then
-    if ( T_e_min < 0.5d0 * T_min_neg ) then
-      do i = 1, node_list%n_nodes
-        node_list%node(i)%values(1,1,var_Te) = node_list%node(i)%values(1,1,var_Te) + (0.5d0 * T_min_neg - T_e_min)
-      end do
-      write(*,*) '  T_e: smallest n=0 value ', T_e_min, ' raised to ', 0.5d0 * T_min_neg, ' (constant shift of ', &
-                 0.5d0 * T_min_neg - T_e_min, ')'
-    end if
   end if
 end if
 
