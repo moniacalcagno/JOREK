@@ -37,31 +37,4 @@ contains
 !
 ! The include directive is used here to avoid code duplication.
 #include "corr_neg_include.f90"
-
-
-
-!> Apply corr_neg_temp to the n=0 temperature at one node, given as (value, d/ds, d/dt, d2/dsdt)
-!! (n_order = 3). Use scale = 1 for the total temperature T and scale = 2 for T_i and T_e, as in
-!! the element matrix of model600: corr_neg_temp(2*T_i)/2. The derivatives follow the chain rule.
-subroutine corr_neg_temp_node(v, scale, corrected)
-
-  real*8,  intent(inout) :: v(4)       !< n=0 temperature at the node
-  real*8,  intent(in)    :: scale      !< 1 for T, 2 for T_i and T_e
-  logical, intent(out)   :: corrected  !< .true. if the value was changed
-
-  real*8 :: f0, f1, f2, v4
-
-  f0 = corr_neg_temp(scale * v(1)) / scale
-  f1 = dcorr_neg_temp_dT(scale * v(1))
-  f2 = scale * d2corr_neg_temp_dT2(scale * v(1))
-
-  corrected = (f0 /= v(1))
-  v4   = f1 * v(4) + f2 * v(2) * v(3)
-  v(1) = f0
-  v(2) = f1 * v(2)
-  v(3) = f1 * v(3)
-  v(4) = v4
-
-end subroutine corr_neg_temp_node
-
 end module corr_neg

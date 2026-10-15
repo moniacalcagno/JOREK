@@ -3,8 +3,7 @@
 !! Variables with an input profile (rho, T, T_i, T_e, rho_n, Vpar) get the n=0 profile, as in
 !! initial_conditions; all other missing variables stay zero. If the total temperature T of the file
 !! was stored in T_e (split_T), T_i is taken from its input profile and T_e = T - T_i for n=0, while
-!! the n/=0 harmonics of T are split equally between T_i and T_e; corr_neg_temp is applied to the
-!! n=0 part of T_e.
+!! the n/=0 harmonics of T are split equally between T_i and T_e.
 subroutine init_missing_variables(node_list, var_imported, split_T)
 
 use constants
@@ -12,7 +11,6 @@ use data_structure
 use phys_module
 use equil_info
 use mod_sources
-use corr_neg, only: corr_neg_temp_node
 
 implicit none
 
@@ -20,11 +18,11 @@ type (type_node_list), intent(inout) :: node_list
 logical,               intent(in)    :: var_imported(n_var) !< .true. if the variable was read from the restart file
 logical,               intent(in)    :: split_T             !< T_e holds the total temperature of the file
 
-integer    :: i, ivar, n_neg, n_corr
+integer    :: i, ivar, n_neg
 real*8     :: psi, R, Z, T_e_min
 real*8     :: zf, df_dpsi, df_dz, df_dpsi2, df_dz2, df_dpsi_dz, df_dpsi3, df_dpsi_dz2, df_dpsi2_dz
 real*8     :: Omega, dOmega_dpsi, dOmega_dz, dOmega_dpsi2, dOmega_dz2, dOmega_dpsi_dz
-logical    :: use_profile(n_var), use_velocity, corrected
+logical    :: use_profile(n_var), use_velocity
 
 write(*,*) '***************************************'
 write(*,*) '*  init missing variables  (600)      *'
@@ -115,9 +113,8 @@ end do
 
 ! --- Split the total temperature of the file into T_i (input profile) and T_e = T - T_i
 if ( split_T ) then
-  write(*,*) '  T_i, T_e : n=0 T_i from the input profile, T_e = T - T_i (with corr_neg_temp); n/=0 T split equally'
+  write(*,*) '  T_i, T_e : n=0 T_i from the input profile, T_e = T - T_i; n/=0 T split equally'
   n_neg   = 0
-  n_corr  = 0
   T_e_min = huge(1.d0)
   do i = 1, node_list%n_nodes
     if ( n_order <= 3 ) then
@@ -136,14 +133,9 @@ if ( split_T ) then
     end if
     T_e_min = min(T_e_min, node_list%node(i)%values(1,1,var_Te))
     if ( node_list%node(i)%values(1,1,var_Te) <= 0.d0 ) n_neg = n_neg + 1
-    if ( n_order <= 3 ) then
-      call corr_neg_temp_node(node_list%node(i)%values(1,:,var_Te), 2.d0, corrected)
-      if ( corrected ) n_corr = n_corr + 1
-    end if
   end do
-  write(*,*) '  T_e = T - T_i: minimum before corr_neg_temp = ', T_e_min, ', corrected at ', n_corr, ' nodes'
   if ( n_neg > 0 ) then
-    write(*,*) 'WARNING: T_e = T - T_i was not positive at ', n_neg, ' nodes (raised to the corr_neg_temp floor).'
+    write(*,*) 'WARNING: T_e = T - T_i is not positive at ', n_neg, ' nodes (minimum ', T_e_min, ').'
     write(*,*) '         Check that the input T_i profile is below the total temperature T.'
   end if
 end if

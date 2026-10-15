@@ -987,7 +987,6 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   use phys_module
   use pellet_module
   use vacuum, only: import_HDF5_restart_vacuum, current_FB_fact
-  use corr_neg, only: corr_neg_temp_node
   use mod_element_rtree, only: populate_element_rtree
 #ifdef USE_HDF5
   use hdf5
@@ -1026,9 +1025,6 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer              :: n_var_order_import
   integer              :: k_rho_drop, n_T_rho, iv, ivar_list(3), ivar_T_rho(3)  ! density dropped: temperatures multiplied by rho
   real*8,  allocatable :: rho_loc(:,:), drho_loc(:,:), tmp_v(:,:), tmp_d(:,:)
-  integer              :: n_corr_T                                             ! nodes where corr_neg_temp changed rho*T
-  real*8               :: T_rho_min, corr_scale
-  logical              :: corrected
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
   logical              :: kept, modes_changed, import_3xx_4xx
@@ -1250,11 +1246,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   end if
   if ( n_T_rho > 0 ) then
     write(*,*) '  The compiled model has no density (rho = 1): to keep the pressure, the imported'
-    write(*,*) '  temperatures are multiplied by rho of the file (linearised in the n/=0 harmonics)'
-    write(*,*) '  and corr_neg_temp is applied to their n=0 part.'
+    write(*,*) '  temperatures are multiplied by rho of the file (linearised in the n/=0 harmonics).'
   end if
-  n_corr_T  = 0
-  T_rho_min = huge(1.d0)
   call HDF5_integer_reading(file_id,n_order_tmp,"n_order")
   call HDF5_integer_reading(file_id,n_tor_tmp, "n_tor")
   n_tor_restart = n_tor_tmp
@@ -1552,13 +1545,6 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
         tmp_d = node_list%node(i)%deltas(:,:,ivar_T_rho(iv))
         node_list%node(i)%values(:,:,ivar_T_rho(iv)) = linearised_product(rho_loc, tmp_v)
         node_list%node(i)%deltas(:,:,ivar_T_rho(iv)) = linearised_product(rho_loc, tmp_d) + linearised_product(drho_loc, tmp_v)
-        ! --- corr_neg_temp on the n=0 part (T_i and T_e with the factor 2 used in the element matrix;
-        ! --- a total temperature that is split into T_i and T_e later is still T here)
-        corr_scale = 1.d0
-        if ( (ivar_T_rho(iv) == var_Ti) .or. ((ivar_T_rho(iv) == var_Te) .and. (.not. split_T_into_TiTe)) ) corr_scale = 2.d0
-        T_rho_min = min(T_rho_min, node_list%node(i)%values(1,1,ivar_T_rho(iv)))
-        call corr_neg_temp_node(node_list%node(i)%values(1,:,ivar_T_rho(iv)), corr_scale, corrected)
-        if ( corrected ) n_corr_T = n_corr_T + 1
       end do
     end if
 
@@ -2560,7 +2546,6 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_x,"t_x",CAT_UNKNOWN)
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
-  if ( n_T_rho > 0 ) write(*,*) '  rho*T: minimum before corr_neg_temp = ', T_rho_min, ', corrected at ', n_corr_T, ' node values'
   deallocate(var_map, var_src, var_dst)
   if ( allocated(rho_loc) ) deallocate(rho_loc, drho_loc, tmp_v, tmp_d)
   if(aux_values_read) then
