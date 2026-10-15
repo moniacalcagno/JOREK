@@ -38,6 +38,10 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
   
   if ( rst_hdf5 == 0 ) then
     write(*,*) " Restart from BINARY file " // trim(filename) // '.rst'
+    if ( any(len_trim(var_order_import) > 0) ) then
+      write(*,*) 'ERROR: var_order_import is only supported for HDF5 restart files (rst_hdf5 = 1).'
+      stop
+    end if
     if(present(aux_node_list)) then 
       call import_binary_restart(node_list=node_list, element_list=element_list, &
            filename=trim(filename)//'.rst', format_rst=format_rst, error=ierr, &
@@ -1004,6 +1008,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer              :: n_pieces_max_tmp, n_degrees_tmp, nref_max_tmp, n_ref_list_tmp, n_new_modes
   real*8               :: growth_mag, growth_kin, amplitude
   integer, allocatable :: mode_tmp(:), new_mode(:)
+  integer, allocatable :: var_map(:)          ! variable index in the compiled model for each variable in the file
+  integer              :: n_var_order_import
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
   logical              :: kept, modes_changed, import_3xx_4xx
@@ -1133,8 +1139,42 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call HDF5_integer_reading(file_id,n_var_tmp,"n_var")
   if (n_aux_var == 0) call HDF5_integer_reading(file_id,n_aux_var,"n_aux_var") ! for diagnostic purposes
   
+  ! --- By default, variable k of the file is variable k of the compiled model
+  allocate(var_map(n_var_tmp))
+  do k = 1, n_var_tmp
+    var_map(k) = k
+  end do
+  n_var_order_import = count(len_trim(var_order_import) > 0)
+
   import_3xx_4xx = .false.
-  if ( (jorek_model >= 400) .and. (jorek_model <= 499) .and. (jorek_model_tmp >= 300) .and. (jorek_model_tmp <= 399) ) then
+  if ( n_var_order_import > 0 ) then
+    ! --- Import from another model, with the variable order of the file given by var_order_import
+    write(*,*) 'WARNING: Restarting a JOREK model ', jorek_model_tmp, ' simulation with model ', jorek_model, &
+               ' using var_order_import.'
+    if ( (n_var_order_import /= n_var_tmp) .or. any(len_trim(var_order_import(1:min(n_var_tmp,n_var_import_max))) == 0) ) then
+      write(*,*) 'ERROR: var_order_import must list exactly the n_var variables of the restart file, in order.'
+      write(*,*) '  n_var in restart file         = ', n_var_tmp
+      write(*,*) '  entries in var_order_import   = ', n_var_order_import
+      stop
+    end if
+    do k = 1, n_var_tmp
+      var_map(k) = variable_index_from_name(var_order_import(k))
+      if ( (var_map(k) < 1) .or. (var_map(k) > n_var) ) then
+        write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), &
+                   '" is not a variable of the compiled model.'
+        stop
+      end if
+      if ( any(var_map(1:k-1) == var_map(k)) ) then
+        write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), '" is listed twice.'
+        stop
+      end if
+      write(*,'(3x,I3,A,A,A,I3)') k, ' -> ', trim(var_order_import(k)), ' = variable ', var_map(k)
+    end do
+    do k = 1, n_var
+      if ( .not. any(var_map == k) ) write(*,*) '  WARNING: variable ', trim(variable_names(k)), &
+                                                ' is not in the restart file and is initialised to zero.'
+    end do
+  else if ( (jorek_model >= 400) .and. (jorek_model <= 499) .and. (jorek_model_tmp >= 300) .and. (jorek_model_tmp <= 399) ) then
     import_3xx_4xx = .true. ! Import a JOREK model 3XX restart file into a 4XX binary
     write(*,*) 'WARNING: Restarting a JOREK model 3XX simulation with model 4XX.'
   else if ( n_var /= n_var_tmp ) then
@@ -1400,13 +1440,13 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
                 
 
-              node_list%node(i)%values(k,j,1:n_var_tmp)   = t_values(i,m,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k,j,1:n_var_tmp)   = t_deltas(i,m,j,1:n_var_tmp)
+              node_list%node(i)%values(k,j,var_map)   = t_values(i,m,j,1:n_var_tmp)
+              node_list%node(i)%deltas(k,j,var_map)   = t_deltas(i,m,j,1:n_var_tmp)
             else
-              node_list%node(i)%values(k-1,j,1:n_var_tmp) = t_values(i,m-1,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k-1,j,1:n_var_tmp) = t_deltas(i,m-1,j,1:n_var_tmp) 
-              node_list%node(i)%values(k,j,1:n_var_tmp)   = t_values(i,m,j,1:n_var_tmp) 
-              node_list%node(i)%deltas(k,j,1:n_var_tmp)   = t_deltas(i,m,j,1:n_var_tmp)
+              node_list%node(i)%values(k-1,j,var_map) = t_values(i,m-1,j,1:n_var_tmp)
+              node_list%node(i)%deltas(k-1,j,var_map) = t_deltas(i,m-1,j,1:n_var_tmp)
+              node_list%node(i)%values(k,j,var_map)   = t_values(i,m,j,1:n_var_tmp)
+              node_list%node(i)%deltas(k,j,var_map)   = t_deltas(i,m,j,1:n_var_tmp)
             end if
           end if
         enddo
@@ -2411,6 +2451,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_x,"t_x",CAT_UNKNOWN)
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
+  deallocate(var_map)
   if(aux_values_read) then
     call tr_deallocate(t_aux_values,"t_aux_values",CAT_UNKNOWN)
   endif

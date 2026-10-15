@@ -95,6 +95,49 @@ end function variable_names
 
 
 
+!> Index of a variable in the compiled model from its name ('var_psi', 'var_u', ...).
+!! Returns 0 if the variable is unknown or does not exist in the compiled model.
+integer pure function variable_index_from_name(var_name)
+
+implicit none
+
+character(len=*), intent(in) :: var_name
+
+character(len=len(var_name)) :: lname
+integer :: i, ic
+
+lname = adjustl(var_name)
+do i = 1, len_trim(lname)
+  ic = iachar(lname(i:i))
+  if ( (ic >= iachar('A')) .and. (ic <= iachar('Z')) ) lname(i:i) = achar(ic + 32)
+end do
+
+select case ( trim(lname) )
+  case ('var_psi');    variable_index_from_name = var_psi
+  case ('var_u');      variable_index_from_name = var_u
+  case ('var_zj');     variable_index_from_name = var_zj
+  case ('var_w');      variable_index_from_name = var_w
+  case ('var_rho');    variable_index_from_name = var_rho
+  case ('var_t');      variable_index_from_name = var_T
+  case ('var_ti');     variable_index_from_name = var_Ti
+  case ('var_te');     variable_index_from_name = var_Te
+  case ('var_vpar');   variable_index_from_name = var_Vpar
+  case ('var_rhon');   variable_index_from_name = var_rhon
+  case ('var_rhoimp'); variable_index_from_name = var_rhoimp
+  case ('var_nre');    variable_index_from_name = var_nre
+  case ('var_ar');     variable_index_from_name = var_AR
+  case ('var_az');     variable_index_from_name = var_AZ
+  case ('var_a3');     variable_index_from_name = var_A3
+  case ('var_ur');     variable_index_from_name = var_uR
+  case ('var_uz');     variable_index_from_name = var_uZ
+  case ('var_up');     variable_index_from_name = var_up
+  case default;        variable_index_from_name = 0
+end select
+
+end function variable_index_from_name
+
+
+
 #ifdef MODEL_FAMILY
 
 !> Are all selected extensions available and compatible?

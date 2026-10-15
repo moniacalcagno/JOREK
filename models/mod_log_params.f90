@@ -262,6 +262,9 @@ write(*,'(1x,a)',advance='no') ' USE_DOMM            : '
   write(*,INTG_FMT) 'rst_format            ', rst_format
   write(*,INTG_FMT) 'rst_hdf5              ', rst_hdf5
   write(*,INTG_FMT) 'rst_hdf5_version      ', rst_hdf5_version
+  do i = 1, n_var_import_max
+    if ( len_trim(var_order_import(i)) > 0 ) write(*,CHAR_FMT2) 'var_order_import(', i, ')', trim(var_order_import(i))
+  end do
   write(*,LOGI_FMT) 'regrid                ', regrid
   write(*,LOGI_FMT) 'write_ps              ', write_ps
   write(*,INTG_FMT) 'n_R                   ', n_R

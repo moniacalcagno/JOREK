@@ -74,6 +74,8 @@ module phys_module
   integer :: rst_format           !< 0 == old format, 1 == new format for restart file
   integer :: n_tor_restart        !< Number of toroidal harmonics read in the restart file
   logical :: restart              !< Restart a code run from the restart file jorek_restart.h5?
+  integer, parameter :: n_var_import_max = 32 !< Maximum number of entries in var_order_import
+  character(len=16)  :: var_order_import(n_var_import_max) !< Variable order of the HDF5 restart file (e.g. 'var_psi','var_u',...), to restart from a different model; empty = same model
   logical :: regrid               !< Re-generate the flux-aligned grid (does not work currently)?
   logical :: regrid_from_rz       !< Re-generate the flux-aligned grid from an rz equilibrium
   logical :: import_equil         !< (presently unused)
