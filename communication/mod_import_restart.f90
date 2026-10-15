@@ -1025,6 +1025,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer              :: n_var_order_import
   integer              :: k_rho_drop, n_T_rho, iv, ivar_list(3), ivar_T_rho(3)  ! density dropped: temperatures multiplied by rho
   real*8,  allocatable :: rho_loc(:,:), drho_loc(:,:), tmp_v(:,:), tmp_d(:,:)
+  real*8               :: T_floor, T_rho_min
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
   logical              :: kept, modes_changed, import_3xx_4xx
@@ -2546,6 +2547,32 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_x,"t_x",CAT_UNKNOWN)
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
+  ! --- Raise the temperatures computed as rho*T by a constant, so that their smallest n=0 node value
+  ! --- is T_min_neg (T_min_neg/2 for T_i and T_e; a total temperature that is split later is still T here)
+  if ( n_T_rho > 0 ) then
+    if ( T_min_neg >= 0.d0 ) then
+      do iv = 1, n_T_rho
+        T_floor = T_min_neg
+        if ( (ivar_T_rho(iv) == var_Ti) .or. ((ivar_T_rho(iv) == var_Te) .and. (.not. split_T_into_TiTe)) ) T_floor = 0.5d0 * T_min_neg
+        T_rho_min = huge(1.d0)
+        do i = 1, node_list%n_nodes
+          T_rho_min = min(T_rho_min, node_list%node(i)%values(1,1,ivar_T_rho(iv)))
+        end do
+        if ( T_rho_min < T_floor ) then
+          do i = 1, node_list%n_nodes
+            node_list%node(i)%values(1,1,ivar_T_rho(iv)) = node_list%node(i)%values(1,1,ivar_T_rho(iv)) + (T_floor - T_rho_min)
+          end do
+          write(*,*) '  rho*T: smallest n=0 value ', T_rho_min, ' raised to ', T_floor, ' (constant shift of ', &
+                     T_floor - T_rho_min, ')'
+        else
+          write(*,*) '  rho*T: smallest n=0 value ', T_rho_min, ' is not below ', T_floor, ', no shift'
+        end if
+      end do
+    else
+      write(*,*) '  rho*T: T_min_neg < 0, the temperatures are not shifted'
+    end if
+  end if
+
   deallocate(var_map, var_src, var_dst)
   if ( allocated(rho_loc) ) deallocate(rho_loc, drho_loc, tmp_v, tmp_d)
   if(aux_values_read) then
