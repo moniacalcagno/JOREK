@@ -95,43 +95,91 @@ end function variable_names
 
 
 
-!> Index of a variable in the compiled model from its name ('var_psi', 'var_u', ...).
-!! Returns 0 if the variable is unknown or does not exist in the compiled model.
-integer pure function variable_index_from_name(var_name)
+!> Canonical name of a variable ('psi', 'u', 'zj', 'w', 'rho', 'T', 'Ti', 'Te', 'Vpar', ...).
+!! Accepts the names of the var_* constants with or without the prefix 'var_' and the names
+!! returned by variable_names (e.g. 'var_w', 'w' and 'omega'; 'var_Vpar', 'vpar' and 'v_par'),
+!! case insensitive. Returns '' for an unknown name.
+character(len=8) pure function variable_canonical_name(var_name)
 
 implicit none
 
 character(len=*), intent(in) :: var_name
 
-character(len=len(var_name)) :: lname
-integer :: i, ic
+character(len=len(var_name)) :: lname, sname
+integer :: i, ic, n
 
+! --- Lower case
 lname = adjustl(var_name)
 do i = 1, len_trim(lname)
   ic = iachar(lname(i:i))
   if ( (ic >= iachar('A')) .and. (ic <= iachar('Z')) ) lname(i:i) = achar(ic + 32)
 end do
 
-select case ( trim(lname) )
-  case ('var_psi');    variable_index_from_name = var_psi
-  case ('var_u');      variable_index_from_name = var_u
-  case ('var_zj');     variable_index_from_name = var_zj
-  case ('var_w');      variable_index_from_name = var_w
-  case ('var_rho');    variable_index_from_name = var_rho
-  case ('var_t');      variable_index_from_name = var_T
-  case ('var_ti');     variable_index_from_name = var_Ti
-  case ('var_te');     variable_index_from_name = var_Te
-  case ('var_vpar');   variable_index_from_name = var_Vpar
-  case ('var_rhon');   variable_index_from_name = var_rhon
-  case ('var_rhoimp'); variable_index_from_name = var_rhoimp
-  case ('var_nre');    variable_index_from_name = var_nre
-  case ('var_ar');     variable_index_from_name = var_AR
-  case ('var_az');     variable_index_from_name = var_AZ
-  case ('var_a3');     variable_index_from_name = var_A3
-  case ('var_ur');     variable_index_from_name = var_uR
-  case ('var_uz');     variable_index_from_name = var_uZ
-  case ('var_up');     variable_index_from_name = var_up
-  case default;        variable_index_from_name = 0
+! --- Remove the prefix 'var_' and all underscores
+if ( lname(1:min(4,len(lname))) == 'var_' ) lname = lname(5:)
+sname = ''
+n = 0
+do i = 1, len_trim(lname)
+  if ( lname(i:i) /= '_' ) then
+    n = n + 1
+    sname(n:n) = lname(i:i)
+  end if
+end do
+
+select case ( trim(sname) )
+  case ('psi');            variable_canonical_name = 'psi'
+  case ('u');              variable_canonical_name = 'u'
+  case ('zj');             variable_canonical_name = 'zj'
+  case ('w', 'omega');     variable_canonical_name = 'w'
+  case ('rho');            variable_canonical_name = 'rho'
+  case ('t');              variable_canonical_name = 'T'
+  case ('ti');             variable_canonical_name = 'Ti'
+  case ('te');             variable_canonical_name = 'Te'
+  case ('vpar');           variable_canonical_name = 'Vpar'
+  case ('rhon');           variable_canonical_name = 'rhon'
+  case ('rhoimp');         variable_canonical_name = 'rhoimp'
+  case ('nre');            variable_canonical_name = 'nre'
+  case ('ar');             variable_canonical_name = 'AR'
+  case ('az');             variable_canonical_name = 'AZ'
+  case ('a3');             variable_canonical_name = 'A3'
+  case ('ur');             variable_canonical_name = 'uR'
+  case ('uz');             variable_canonical_name = 'uZ'
+  case ('up', 'uphi');     variable_canonical_name = 'up'
+  case default;            variable_canonical_name = ''
+end select
+
+end function variable_canonical_name
+
+
+
+!> Index of a variable in the compiled model from its name (see variable_canonical_name).
+!! Returns -1 for an unknown name and 0 for a variable that does not exist in the compiled model.
+integer pure function variable_index_from_name(var_name)
+
+implicit none
+
+character(len=*), intent(in) :: var_name
+
+select case ( trim(variable_canonical_name(var_name)) )
+  case ('psi');    variable_index_from_name = var_psi
+  case ('u');      variable_index_from_name = var_u
+  case ('zj');     variable_index_from_name = var_zj
+  case ('w');      variable_index_from_name = var_w
+  case ('rho');    variable_index_from_name = var_rho
+  case ('T');      variable_index_from_name = var_T
+  case ('Ti');     variable_index_from_name = var_Ti
+  case ('Te');     variable_index_from_name = var_Te
+  case ('Vpar');   variable_index_from_name = var_Vpar
+  case ('rhon');   variable_index_from_name = var_rhon
+  case ('rhoimp'); variable_index_from_name = var_rhoimp
+  case ('nre');    variable_index_from_name = var_nre
+  case ('AR');     variable_index_from_name = var_AR
+  case ('AZ');     variable_index_from_name = var_AZ
+  case ('A3');     variable_index_from_name = var_A3
+  case ('uR');     variable_index_from_name = var_uR
+  case ('uZ');     variable_index_from_name = var_uZ
+  case ('up');     variable_index_from_name = var_up
+  case default;    variable_index_from_name = -1
 end select
 
 end function variable_index_from_name

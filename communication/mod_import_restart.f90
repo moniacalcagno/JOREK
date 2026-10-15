@@ -4,6 +4,10 @@ implicit none
 
 character(len=20), parameter :: rst_file_ind_fmt(2) = (/'(a,i6.6)', '(a,i5.5)'/)
 
+! --- Set by import_hdf5_restart when var_order_import is used, to complete the variables afterwards
+logical, allocatable :: var_imported(:)          !< .true. if the variable of the compiled model was read from the restart file
+logical              :: split_T_into_TiTe = .false. !< .true. if the total temperature of the file was stored in T_e and has to be split
+
 contains
 !> Imports a restart file written out by the routine export_restart.
 
@@ -72,6 +76,14 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
   call update_equil_state(0,node_list, element_list, bnd_elm_list, xpoint, xcase)
   write(*,*) " "
   write(*,*) " The equilibrium state has been updated "
+  
+#if JOREK_MODEL == 600
+  ! --- Complete the variables that were not in the restart file (see var_order_import)
+  if ( allocated(var_imported) ) then
+    if ( (.not. all(var_imported)) .or. split_T_into_TiTe ) &
+      call init_missing_variables(node_list, var_imported, split_T_into_TiTe)
+  end if
+#endif
   
 end subroutine import_restart
 
@@ -1008,7 +1020,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer              :: n_pieces_max_tmp, n_degrees_tmp, nref_max_tmp, n_ref_list_tmp, n_new_modes
   real*8               :: growth_mag, growth_kin, amplitude
   integer, allocatable :: mode_tmp(:), new_mode(:)
-  integer, allocatable :: var_map(:)          ! variable index in the compiled model for each variable in the file
+  integer, allocatable :: var_map(:)          ! variable index in the compiled model for each variable in the file (0: dropped)
+  integer, allocatable :: var_src(:), var_dst(:) ! file and compiled-model indices of the variables that are imported
   integer              :: n_var_order_import
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
@@ -1144,6 +1157,10 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   do k = 1, n_var_tmp
     var_map(k) = k
   end do
+  if (allocated(var_imported)) deallocate(var_imported)
+  allocate(var_imported(n_var))
+  var_imported(:)   = .true.
+  split_T_into_TiTe = .false.
   n_var_order_import = count(len_trim(var_order_import) > 0)
 
   import_3xx_4xx = .false.
@@ -1159,20 +1176,38 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
     end if
     do k = 1, n_var_tmp
       var_map(k) = variable_index_from_name(var_order_import(k))
-      if ( (var_map(k) < 1) .or. (var_map(k) > n_var) ) then
-        write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), &
-                   '" is not a variable of the compiled model.'
+      if ( var_map(k) < 0 ) then
+        write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), '" is not a known variable name.'
         stop
       end if
-      if ( any(var_map(1:k-1) == var_map(k)) ) then
-        write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), '" is listed twice.'
-        stop
+    end do
+    var_imported(:) = .false.
+    do k = 1, n_var_tmp
+      if ( var_map(k) == 0 ) then
+        if ( (trim(variable_canonical_name(var_order_import(k))) == 'T') .and. (var_Ti > 0) .and. (var_Te > 0) &
+             .and. (.not. any(var_map == var_Ti)) .and. (.not. any(var_map == var_Te)) ) then
+          ! --- Total temperature into a model with T_i and T_e: stored in T_e, split after the import
+          var_map(k) = var_Te
+          var_imported(var_Te) = .true.
+          split_T_into_TiTe = .true.
+          write(*,'(3x,I3,A,A,A)') k, ' -> ', trim(var_order_import(k)), &
+                                   ' = split into T_i (input profile) and T_e = T - T_i'
+        else
+          write(*,'(3x,I3,A,A,A)') k, ' -> ', trim(var_order_import(k)), &
+                                   ' : WARNING, not a variable of the compiled model, dropped'
+        end if
+      else
+        if ( any(var_map(1:k-1) == var_map(k)) ) then
+          write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), '" is listed twice.'
+          stop
+        end if
+        var_imported(var_map(k)) = .true.
+        write(*,'(3x,I3,A,A,A,I3)') k, ' -> ', trim(var_order_import(k)), ' = variable ', var_map(k)
       end if
-      write(*,'(3x,I3,A,A,A,I3)') k, ' -> ', trim(var_order_import(k)), ' = variable ', var_map(k)
     end do
     do k = 1, n_var
-      if ( .not. any(var_map == k) ) write(*,*) '  WARNING: variable ', trim(variable_names(k)), &
-                                                ' is not in the restart file and is initialised to zero.'
+      if ( .not. var_imported(k) ) write(*,*) '  WARNING: variable ', trim(variable_names(k)), &
+                                              ' is not in the restart file (initialised after the import).'
     end do
   else if ( (jorek_model >= 400) .and. (jorek_model <= 499) .and. (jorek_model_tmp >= 300) .and. (jorek_model_tmp <= 399) ) then
     import_3xx_4xx = .true. ! Import a JOREK model 3XX restart file into a 4XX binary
@@ -1183,6 +1218,9 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
     write(*,*) '  As an exception, importing a 3XX restart file into model 4XX has been implemented.'
     stop
   end if
+  allocate(var_src(count(var_map > 0)), var_dst(count(var_map > 0)))
+  var_src(:) = pack( (/ (k, k=1,n_var_tmp) /), var_map > 0 )
+  var_dst(:) = pack( var_map, var_map > 0 )
   call HDF5_integer_reading(file_id,n_order_tmp,"n_order")
   call HDF5_integer_reading(file_id,n_tor_tmp, "n_tor")
   n_tor_restart = n_tor_tmp
@@ -1440,13 +1478,13 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
                 
 
-              node_list%node(i)%values(k,j,var_map)   = t_values(i,m,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k,j,var_map)   = t_deltas(i,m,j,1:n_var_tmp)
+              node_list%node(i)%values(k,j,var_dst)   = t_values(i,m,j,var_src)
+              node_list%node(i)%deltas(k,j,var_dst)   = t_deltas(i,m,j,var_src)
             else
-              node_list%node(i)%values(k-1,j,var_map) = t_values(i,m-1,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k-1,j,var_map) = t_deltas(i,m-1,j,1:n_var_tmp)
-              node_list%node(i)%values(k,j,var_map)   = t_values(i,m,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k,j,var_map)   = t_deltas(i,m,j,1:n_var_tmp)
+              node_list%node(i)%values(k-1,j,var_dst) = t_values(i,m-1,j,var_src)
+              node_list%node(i)%deltas(k-1,j,var_dst) = t_deltas(i,m-1,j,var_src)
+              node_list%node(i)%values(k,j,var_dst)   = t_values(i,m,j,var_src)
+              node_list%node(i)%deltas(k,j,var_dst)   = t_deltas(i,m,j,var_src)
             end if
           end if
         enddo
@@ -2451,7 +2489,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_x,"t_x",CAT_UNKNOWN)
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
-  deallocate(var_map)
+  deallocate(var_map, var_src, var_dst)
   if(aux_values_read) then
     call tr_deallocate(t_aux_values,"t_aux_values",CAT_UNKNOWN)
   endif
