@@ -1023,6 +1023,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer, allocatable :: var_map(:)          ! variable index in the compiled model for each variable in the file (0: dropped)
   integer, allocatable :: var_src(:), var_dst(:) ! file and compiled-model indices of the variables that are imported
   integer              :: n_var_order_import
+  integer              :: k_rho_drop, n_T_rho, iv, ivar_list(3), ivar_T_rho(3)  ! density dropped: temperatures multiplied by rho
+  real*8,  allocatable :: rho_loc(:,:), drho_loc(:,:), tmp_v(:,:), tmp_d(:,:)
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
   logical              :: kept, modes_changed, import_3xx_4xx
@@ -1221,6 +1223,31 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   allocate(var_src(count(var_map > 0)), var_dst(count(var_map > 0)))
   var_src(:) = pack( (/ (k, k=1,n_var_tmp) /), var_map > 0 )
   var_dst(:) = pack( var_map, var_map > 0 )
+
+  ! --- Density in the file but not in the compiled model (which then uses rho = 1):
+  ! --- multiply the imported temperatures by rho to keep the pressure
+  k_rho_drop = 0
+  n_T_rho    = 0
+  if ( n_var_order_import > 0 ) then
+    do k = 1, n_var_tmp
+      if ( (var_map(k) == 0) .and. (trim(variable_canonical_name(var_order_import(k))) == 'rho') ) k_rho_drop = k
+    end do
+  end if
+  if ( k_rho_drop > 0 ) then
+    ivar_list = (/ var_T, var_Ti, var_Te /)
+    do iv = 1, 3
+      if ( ivar_list(iv) > 0 ) then
+        if ( var_imported(ivar_list(iv)) ) then
+          n_T_rho = n_T_rho + 1
+          ivar_T_rho(n_T_rho) = ivar_list(iv)
+        end if
+      end if
+    end do
+  end if
+  if ( n_T_rho > 0 ) then
+    write(*,*) '  The compiled model has no density (rho = 1): to keep the pressure, the imported'
+    write(*,*) '  temperatures are multiplied by rho of the file (linearised in the n/=0 harmonics).'
+  end if
   call HDF5_integer_reading(file_id,n_order_tmp,"n_order")
   call HDF5_integer_reading(file_id,n_tor_tmp, "n_tor")
   n_tor_restart = n_tor_tmp
@@ -1490,6 +1517,36 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
         enddo
       end do
     end do
+
+    if ( n_T_rho > 0 ) then
+      if ( n_degrees_tmp /= 4 ) then
+        write(*,*) 'ERROR: multiplying the temperatures by rho is only implemented for n_order = 3.'
+        stop
+      end if
+      if ( .not. allocated(rho_loc) ) allocate(rho_loc(n_tor,n_degrees_tmp), drho_loc(n_tor,n_degrees_tmp), &
+                                               tmp_v(n_tor,n_degrees_tmp),   tmp_d(n_tor,n_degrees_tmp))
+      rho_loc  = 0.d0
+      drho_loc = 0.d0
+      do m=1,n_tor_tmp,2
+        do k=1, n_tor,2
+          if (mode_tmp(m) .eq. mode(k)) then
+            if ((m .eq. 1) .and. (k.eq.1)) then
+              rho_loc(k,:)      = t_values(i,m,1:n_degrees_tmp,k_rho_drop)
+              drho_loc(k,:)     = t_deltas(i,m,1:n_degrees_tmp,k_rho_drop)
+            else
+              rho_loc(k-1:k,:)  = t_values(i,m-1:m,1:n_degrees_tmp,k_rho_drop)
+              drho_loc(k-1:k,:) = t_deltas(i,m-1:m,1:n_degrees_tmp,k_rho_drop)
+            end if
+          end if
+        end do
+      end do
+      do iv = 1, n_T_rho
+        tmp_v = node_list%node(i)%values(:,:,ivar_T_rho(iv))
+        tmp_d = node_list%node(i)%deltas(:,:,ivar_T_rho(iv))
+        node_list%node(i)%values(:,:,ivar_T_rho(iv)) = linearised_product(rho_loc, tmp_v)
+        node_list%node(i)%deltas(:,:,ivar_T_rho(iv)) = linearised_product(rho_loc, tmp_d) + linearised_product(drho_loc, tmp_v)
+      end do
+    end if
 
     if(aux_values_read) then
      aux_node_list%node(i)%values = 0.d0
@@ -2490,6 +2547,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
   deallocate(var_map, var_src, var_dst)
+  if ( allocated(rho_loc) ) deallocate(rho_loc, drho_loc, tmp_v, tmp_d)
   if(aux_values_read) then
     call tr_deallocate(t_aux_values,"t_aux_values",CAT_UNKNOWN)
   endif
@@ -2554,6 +2612,35 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
   return
 end subroutine import_hdf5_restart
+
+
+
+!> Product of two fields given at one node as (harmonic, degree), for n_order = 3 (4 degrees).
+!! The n=0 harmonic is a0*b0; the n/=0 harmonics are linearised: a0*bn + an*b0.
+!! The degrees (value, d/ds, d/dt, d2/dsdt) follow the product rule.
+pure function linearised_product(a, b) result(c)
+
+  real*8, intent(in) :: a(:,:), b(:,:)
+  real*8             :: c(size(a,1),size(a,2))
+  integer            :: k
+
+  c(1,:) = node_product(a(1,:), b(1,:))
+  do k = 2, size(a,1)
+    c(k,:) = node_product(a(1,:), b(k,:)) + node_product(a(k,:), b(1,:))
+  end do
+
+contains
+
+  pure function node_product(f, g) result(h)
+    real*8, intent(in) :: f(4), g(4)
+    real*8             :: h(4)
+    h(1) = f(1)*g(1)
+    h(2) = f(1)*g(2) + f(2)*g(1)
+    h(3) = f(1)*g(3) + f(3)*g(1)
+    h(4) = f(1)*g(4) + f(2)*g(3) + f(3)*g(2) + f(4)*g(1)
+  end function node_product
+
+end function linearised_product
 
 
 ! Import an HDF5 restart file (aux_node_list) - used only for some diagnostics purpose
