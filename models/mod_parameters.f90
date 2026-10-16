@@ -25,10 +25,13 @@ logical :: long2
 
 long2 = .false.
 
-if ( (i_var < 1) .or. (i_var > n_var) ) then
+if ( (i_var < 1) .or. (i_var > n_eq_var) ) then
   name  = 'NONE'
   descr = 'Illegal variable index!'
   return
+else if ( i_var == var_rho_frozen ) then
+  name  = 'rho'
+  descr = 'particle density (frozen, not evolved)'
 else if ( i_var == var_psi ) then
   name  = 'Psi'
   descr = 'poloidal magnetic flux'
@@ -154,6 +157,7 @@ end function variable_canonical_name
 
 !> Index of a variable in the compiled model from its name (see variable_canonical_name).
 !! Returns -1 for an unknown name and 0 for a variable that does not exist in the compiled model.
+!! The density refers to the frozen density (var_rho_frozen) in a model that stores but does not evolve it.
 integer pure function variable_index_from_name(var_name)
 
 implicit none
@@ -165,7 +169,7 @@ select case ( trim(variable_canonical_name(var_name)) )
   case ('u');      variable_index_from_name = var_u
   case ('zj');     variable_index_from_name = var_zj
   case ('w');      variable_index_from_name = var_w
-  case ('rho');    variable_index_from_name = var_rho
+  case ('rho');    variable_index_from_name = merge(var_rho, var_rho_frozen, var_rho > 0)
   case ('T');      variable_index_from_name = var_T
   case ('Ti');     variable_index_from_name = var_Ti
   case ('Te');     variable_index_from_name = var_Te

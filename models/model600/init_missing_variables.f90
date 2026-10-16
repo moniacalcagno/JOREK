@@ -1,6 +1,6 @@
 !> Complete the variables that were not in the restart file when importing it with var_order_import.
 !!
-!! Variables with an input profile (rho, T, T_i, T_e, rho_n, Vpar) get the n=0 profile, as in
+!! Variables with an input profile (rho, frozen rho, T, T_i, T_e, rho_n, Vpar) get the n=0 profile, as in
 !! initial_conditions; all other missing variables stay zero. If the total temperature T of the file
 !! was stored in T_e (split_T), T_i is taken from its input profile and T_e = T - T_i for n=0, while
 !! the n/=0 harmonics of T are split equally between T_i and T_e. If T_min_neg >= 0, T_e is then raised
@@ -16,14 +16,14 @@ use mod_sources
 implicit none
 
 type (type_node_list), intent(inout) :: node_list
-logical,               intent(in)    :: var_imported(n_var) !< .true. if the variable was read from the restart file
+logical,               intent(in)    :: var_imported(n_eq_var) !< .true. if the stored field was read from the restart file
 logical,               intent(in)    :: split_T             !< T_e holds the total temperature of the file
 
 integer    :: i, ivar, n_neg
 real*8     :: psi, R, Z, T_e_min
 real*8     :: zf, df_dpsi, df_dz, df_dpsi2, df_dz2, df_dpsi_dz, df_dpsi3, df_dpsi_dz2, df_dpsi2_dz
 real*8     :: Omega, dOmega_dpsi, dOmega_dz, dOmega_dpsi2, dOmega_dz2, dOmega_dpsi_dz
-logical    :: use_profile(n_var), use_velocity
+logical    :: use_profile(n_eq_var), use_velocity
 
 write(*,*) '***************************************'
 write(*,*) '*  init missing variables  (600)      *'
@@ -32,9 +32,9 @@ write(*,*) '***************************************'
 ! --- Variables that are initialised from their input profile
 use_velocity = (abs(V_0) .ge. 1.d-19) .or. (num_rot)
 use_profile(:) = .false.
-do ivar = 1, n_var
+do ivar = 1, n_eq_var
   if ( var_imported(ivar) ) cycle
-  use_profile(ivar) = (ivar == var_rho) .or. (ivar == var_T)    .or. (ivar == var_Ti) .or. &
+  use_profile(ivar) = (ivar == var_rho) .or. (ivar == var_rho_frozen) .or. (ivar == var_T)    .or. (ivar == var_Ti) .or. &
                       (ivar == var_Te)  .or. (ivar == var_rhon) .or. ((ivar == var_Vpar) .and. use_velocity)
   if ( use_profile(ivar) .and. (n_order <= 3) ) then
     write(*,*) '  ', trim(variable_names(ivar)), ' : n=0 from the input profile'
@@ -60,6 +60,14 @@ do i = 1, node_list%n_nodes
       call density(xpoint, xcase, Z, ES%Z_xpoint, psi, ES%psi_axis, ES%psi_bnd, zf, df_dpsi, df_dz, df_dpsi2, df_dz2, &
                    df_dpsi_dz, df_dpsi3, df_dpsi_dz2, df_dpsi2_dz)
       call set_n0(var_rho)
+    end if
+  end if
+
+  if ( var_rho_frozen > 0 ) then
+    if ( use_profile(var_rho_frozen) ) then
+      call density(xpoint, xcase, Z, ES%Z_xpoint, psi, ES%psi_axis, ES%psi_bnd, zf, df_dpsi, df_dz, df_dpsi2, df_dz2, &
+                   df_dpsi_dz, df_dpsi3, df_dpsi_dz2, df_dpsi2_dz)
+      call set_n0(var_rho_frozen)
     end if
   end if
 

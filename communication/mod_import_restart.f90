@@ -1560,6 +1560,11 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
       end do
     end do
 
+    ! --- The frozen density is not evolved: no time increments
+    if ( (var_rho_frozen > 0) .and. (var_rho_frozen <= n_values_import) ) then
+      node_list%node(i)%deltas(:,:,max(var_rho_frozen,1)) = 0.d0
+    end if
+
     if ( n_T_rho > 0 ) then
       if ( n_degrees_tmp /= 4 ) then
         write(*,*) 'ERROR: multiplying the temperatures by rho is only implemented for n_order = 3.'

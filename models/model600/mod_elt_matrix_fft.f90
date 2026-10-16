@@ -589,9 +589,25 @@ do i=1,n_vertex_max
             r0_tt = eq_tt(mp,var_rho,ms,mt)
             delta_rho_g = delta_g(mp,var_rho,ms,mt) 
             delta_rho_s = delta_s(mp,var_rho,ms,mt) 
-            delta_rho_t = delta_t(mp,var_rho,ms,mt) 
+            delta_rho_t = delta_t(mp,var_rho,ms,mt)
+          else if (var_rho_frozen > 0) then
+            ! --- Frozen density (with_frozen_rho): stored at the nodes, not evolved
+            r0    = eq_g(mp,var_rho_frozen,ms,mt)
+            r0_corr = corr_neg_dens(r0)
+            dr0_corr_dn = dcorr_neg_dens_drho(r0)
+            r0_x  = (   y_t(ms,mt) * eq_s(mp,var_rho_frozen,ms,mt) - y_s(ms,mt) * eq_t(mp,var_rho_frozen,ms,mt) ) / xjac
+            r0_y  = ( - x_t(ms,mt) * eq_s(mp,var_rho_frozen,ms,mt) + x_s(ms,mt) * eq_t(mp,var_rho_frozen,ms,mt) ) / xjac
+            r0_p  = eq_p(mp,var_rho_frozen,ms,mt)
+            r0_s  = eq_s(mp,var_rho_frozen,ms,mt)
+            r0_t  = eq_t(mp,var_rho_frozen,ms,mt)
+            r0_ss = eq_ss(mp,var_rho_frozen,ms,mt)
+            r0_st = eq_st(mp,var_rho_frozen,ms,mt)
+            r0_tt = eq_tt(mp,var_rho_frozen,ms,mt)
+            delta_rho_g = 0.d0
+            delta_rho_s = 0.d0
+            delta_rho_t = 0.d0
           else
-            r0    = 1.d0 
+            r0    = 1.d0
             r0_corr = 1.d0
             dr0_corr_dn = 1.d0
             r0_x  = 0.d0 

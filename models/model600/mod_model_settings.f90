@@ -9,6 +9,8 @@ logical, parameter :: with_TiTe       = .false.
 logical, parameter :: with_neutrals   = .false. 
 logical, parameter :: with_impurities = .false.
 logical, parameter :: with_refluid    = .false. ! not yet possible to switch
+logical, parameter :: with_frozen_rho = .false. ! only with with_rho=.false.: density stored at the nodes and used
+                                                ! in the equations, but not evolved (imported from a restart file)
 
 
 ! ##################################################################################################
@@ -50,9 +52,12 @@ integer, parameter :: n_var_refluid     = sum(merge( (/1/), (/0/), with_refluid 
 integer, parameter :: n_var_ext(n_mod_ext) = (/ n_var_TiTe, n_var_vpar, n_var_rho, n_var_neutrals,         &
   n_var_impurities, n_var_refluid /)
 integer, parameter :: n_var = n_var_base + sum(n_var_ext) !< total number of variables
-integer, parameter :: n_eq_var = n_var
+! --- frozen density (with_frozen_rho): stored after the evolved variables, not solved for
+integer, parameter :: n_var_rho_frozen  = sum(merge( (/1/), (/0/), with_frozen_rho .and. (.not. with_rho) ))
+integer, parameter :: n_eq_var = n_var + n_var_rho_frozen
 integer, private :: i_var_index
 integer, dimension(n_var), parameter :: var_index = (/ (i_var_index, i_var_index=1,n_var) /)
+integer, parameter :: var_rho_frozen = sum(merge( (/n_var+1/), (/0/), n_var_rho_frozen > 0 ))
 
 ! --- variable indices for the base model
 integer, parameter :: var_psi  = 1
