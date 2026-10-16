@@ -38,7 +38,7 @@ real*4,allocatable    :: currdens(:), xyz (:,:), scalars(:,:), vectors(:,:,:)
 real*4                :: time_vtk
 integer,allocatable   :: ien (:,:)
 integer, parameter    :: ivtk = 22 ! an arbitrary unit number for the VTK output file
-integer               :: i, j, k, m, etype, irst, int, i_var, i_tor, i_tor_old, i_tor_coord, i_plane, index, index_node, my_id
+integer               :: i, j, k, m, etype, irst, int, i_var, i_tor, i_tor_old, i_tor_coord, i_plane, index, index_node, my_id, n_vars, var_density
 character             :: buffer*80, lf*1, str1*12, str2*12
 character*36, allocatable :: scalar_names(:), vector_names(:), variable_names_si(:)
 real*8                :: s, t
@@ -97,7 +97,7 @@ real*8                :: xjac, xjac_x, xjac_y, v_perp, Psi_J, R_p, error, Btot, 
 real*8                :: particle_source, D_prof, ZK_prof, source_pellet, ZKpar_T
 real*8                :: Jb,rho_norm,t_norm
 integer               :: i_elm_axis, i_elm_xpoint(2), k_tor, ifail, ierr
-logical               :: without_n0_mode, SI_units
+logical               :: with_density, without_n0_mode, SI_units
 logical               :: include_fluxes, include_neo, include_gvec_field, include_magnetic_field, include_vacuum_field
 logical               :: include_velocity_field, include_bootstrap, include_psi_norm, include_electric_field, include_Jpol, RphiZ_coords
 logical               :: include_projections, include_saw_ene
@@ -295,15 +295,28 @@ write(*,*) 'R_geo,Z_geo     =', R_geo, Z_geo
 write(*,*)
 call flush_it(6)
 
+n_vars=n_var
+with_density = .false.
+if ((with_rho).or.(with_frozen_rho)) then
+  with_density = .true.
+  if (with_frozen_rho) then
+    var_density=var_rho_frozen
+    n_vars=n_vars+1
+    write(*,*) n_vars
+  else
+    var_density=var_rho
+  endif
+endif
+
 ! --- Assign variable names in SI units
-allocate(variable_names_si(0:n_var))
-do i=1, n_var
+allocate(variable_names_si(0:n_vars))
+do i=1, n_vars
   variable_names_si(i) = variable_names(i)
 enddo
 
 if ( SI_units ) then
 #ifdef fullmhd
-   variable_names_si(var_rho)='ne20_m-3    '
+   variable_names_si(var_density)='ne20_m-3    '
    variable_names_si(var_T  )='Te_keV      '
    variable_names_si(var_UR )='VR_km/s     '
    variable_names_si(var_UZ )='VZ_km/s     '
@@ -311,7 +324,7 @@ if ( SI_units ) then
 #else
    variable_names_si(var_u)='u_m/s       '
    variable_names_si(var_zj)='j_MA/m2     '
-   if (with_rho) variable_names_si(var_rho)='ne20_m-3    '
+   if (with_density) variable_names_si(var_density)='ne20_m-3    '
    if (with_TiTe) then
       variable_names_si(var_Ti)='Ti_keV      '
       variable_names_si(var_Te)='Te_keV      '
@@ -332,7 +345,7 @@ endif
 
 ! --- Add scalar quantities
 n_scalars = 0
-do i=1, n_var
+do i=1, n_vars
   call add_vtk_entry(variable_names(i), variable_names_si(i), i_test, n_scalars, si_units, scalar_names) 
 enddo
 
@@ -601,8 +614,8 @@ do i=1,element_list%n_elements
         call interp(node_list,element_list,i,var_u,  i_tor,s,t,U0, U0_s, U0_t, U0_st, U0_ss, U0_tt)
         call interp(node_list,element_list,i,var_zj, i_tor,s,t,ZJ0,ZJ0_s,ZJ0_t,ZJ0_st,ZJ0_ss,ZJ0_tt)
         call interp(node_list,element_list,i,var_w,  i_tor,s,t,W0, W0_s, W0_t, W0_st, W0_ss, W0_tt)
-        if (with_rho) then
-          call interp(node_list,element_list,i,var_rho,i_tor,s,t,ZN0,ZN0_s,ZN0_t,ZN0_st,ZN0_ss,ZN0_tt)
+        if (with_density) then
+          call interp(node_list,element_list,i,var_density,i_tor,s,t,ZN0,ZN0_s,ZN0_t,ZN0_st,ZN0_ss,ZN0_tt)
         else
           ZN0=0.d0; ZN0_s=0.d0; ZN0_t=0.d0; ZN0_st=0.d0; ZN0_ss=0.d0; ZN0_tt=0.d0
           if (i_tor==1) ZN0 = 1.d0
@@ -735,7 +748,7 @@ do i=1,element_list%n_elements
       ! 2 cases, depending on the value of i_tor chosen
       if ((i_tor .ge. 1) .and. (i_tor .le. n_tor)) then
 
-        do m=1,n_var
+        do m=1,n_vars
           call interp(node_list,element_list,i,m,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
           scalars(inode,m) = P * HZ(i_tor,i_plane)
         enddo
@@ -760,8 +773,8 @@ do i=1,element_list%n_elements
           call interp(node_list,element_list,i,var_u,  i_tor,s,t,U,U_s,U_t,U_st,U_ss,U_tt)
           call interp(node_list,element_list,i,var_zj, i_tor,s,t,ZJ,ZJ_s,ZJ_t,ZJ_st,ZJ_ss,ZJ_tt)
           call interp(node_list,element_list,i,var_w,  i_tor,s,t,W,W_s,W_t,W_st,W_ss,W_tt)
-          if (with_rho) then
-            call interp(node_list,element_list,i,var_rho,i_tor,s,t,RHO,RHO_s,RHO_t,RHO_st,RHO_ss,RHO_tt)
+          if (with_density) then
+            call interp(node_list,element_list,i,var_density,i_tor,s,t,RHO,RHO_s,RHO_t,RHO_st,RHO_ss,RHO_tt)
           else
             RHO=0.d0; RHO_s=0.d0; RHO_t=0.d0; RHO_st=0.d0; RHO_ss=0.d0; RHO_tt=0.d0
             if (i_tor==1) RHO = 1.d0
@@ -834,7 +847,7 @@ do i=1,element_list%n_elements
           if ( ( i_tor == 1 ) .and. ( without_n0_mode ) ) cycle ! Do not include the n=0 mode
           if (n_coord_period .ne. 1 .and. without_n0_mode .and. mod(mode(i_tor),n_coord_period) .eq. 0) cycle
 
-          do m=1,n_var
+          do m=1,n_vars
              call interp(node_list,element_list,i,m,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
              scalars(inode,m) = scalars(inode,m) + P * HZ(i_tor,i_plane)
           enddo
@@ -852,7 +865,7 @@ do i=1,element_list%n_elements
           call interp(node_list,element_list,i,var_uR, i_tor,s,t,VR0,VR0_s,VR0_t,VR0_st,VR0_ss,VR0_tt)
           call interp(node_list,element_list,i,var_uZ, i_tor,s,t,VZ0,VZ0_s,VZ0_t,VZ0_st,VZ0_ss,VZ0_tt)
           call interp(node_list,element_list,i,var_uP, i_tor,s,t,VP0,VP0_s,VP0_t,VP0_st,VP0_ss,VP0_tt)
-          call interp(node_list,element_list,i,var_rho,i_tor,s,t,ZN0,ZN0_s,ZN0_t,ZN0_st,ZN0_ss,ZN0_tt)
+          call interp(node_list,element_list,i,var_density,i_tor,s,t,ZN0,ZN0_s,ZN0_t,ZN0_st,ZN0_ss,ZN0_tt)
 
           if (with_TiTe) then
             call interp(node_list,element_list,i,var_Te,  i_tor,s,t,Te0, Te0_s, Te0_t, Te0_st, Te0_ss, Te0_tt)
@@ -1037,7 +1050,7 @@ do i=1,element_list%n_elements
 
         if (include_fluxes) then
 
-          scalars(inode,i_flux(1))   = scalars(inode,var_rho) * scalars(inode,var_T)
+          scalars(inode,i_flux(1))   = scalars(inode,var_density) * scalars(inode,var_T)
 
           if (grad_psi .ne. 0.d0) then
 
@@ -1102,7 +1115,7 @@ do i=1,element_list%n_elements
           if ( ( i_tor == 1 ) .and. ( without_n0_mode ) ) cycle ! Do not include the n=0 mode
           if (n_coord_period .ne. 1 .and. without_n0_mode .and. mod(mode(i_tor),n_coord_period) .eq. 0) cycle
 
-          do m=1,n_var
+          do m=1,n_vars
              call interp(node_list,element_list,i,m,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
              scalars(inode,m) = scalars(inode,m) + P * HZ(i_tor,i_plane)
           enddo
@@ -1123,8 +1136,8 @@ do i=1,element_list%n_elements
           call interp(node_list,element_list,i,var_u,  i_tor,s,t,U  ,U_s,  U_t,  U_st,  U_ss,  U_tt)
           call interp(node_list,element_list,i,var_zj, i_tor,s,t,ZJ ,ZJ_s, ZJ_t, ZJ_st, ZJ_ss, ZJ_tt)
           call interp(node_list,element_list,i,var_w,  i_tor,s,t,W  ,W_s,  W_t,  W_st,  W_ss,  W_tt)
-          if (with_rho) then
-            call interp(node_list,element_list,i,var_rho,i_tor,s,t,RHO,RHO_s,RHO_t,RHO_st,RHO_ss,RHO_tt)
+          if (with_density) then
+            call interp(node_list,element_list,i,var_density,i_tor,s,t,RHO,RHO_s,RHO_t,RHO_st,RHO_ss,RHO_tt)
           else
             RHO=0.d0; RHO_s=0.d0; RHO_t=0.d0; RHO_st=0.d0; RHO_ss=0.d0; RHO_tt=0.d0;
             if (i_tor==1) RHO=1.d0
@@ -1287,7 +1300,7 @@ do i=1,element_list%n_elements
         D_prof  = get_dperp (psi_norm)
 
         if (use_zkperp_times_density) then
-          ZK_prof = get_zkperp(psi_norm) * max(scalars(inode,var_rho),zkperp_density_floor)
+          ZK_prof = get_zkperp(psi_norm) * max(scalars(inode,var_density),zkperp_density_floor)
         else
           ZK_prof = get_zkperp(psi_norm)
         endif
@@ -1433,8 +1446,8 @@ enddo  ! n_elements
   if (deuterium_adas)  ad_deuterium =  read_adf11(0,'96_h',trim(adas_dir)) !< for both include_radiation and include_neutral_dens
   if (include_radiation) then
     do i=1,nnos
-      if (with_rho) then
-        r0_real8  = scalars(i,var_rho)
+      if (with_density) then
+        r0_real8  = scalars(i,var_density)
       else
         r0_real8  = 1.d0
       endif
@@ -1462,15 +1475,15 @@ enddo  ! n_elements
 
       ksi_ion_norm = ksi_ion * central_density * 1.d20
       rn0_real8 = scalars(i,var_rhon)
-      if (with_rho) then
-        r0_real8  = scalars(i,var_rho)
+      if (with_density) then
+        r0_real8  = scalars(i,var_density)
       else 
         r0_real8  = 1.d0
       endif
 
       if ( with_TiTe ) then
         call atomic_coeff_deuterium(T_real8, Sion_T, dSion_dT, Srec_T, dSrec_dT, LradDcont_T, dLradDcont_dT, &
-                                    LradDcont_corr, dLradDcont_dT_corr, LradDrays_T, dLradDrays_dT,r0_real8,rn0_real8,.true. ) !< add scalars(i,var_rho) as last optional parameter for density dependence
+                                    LradDcont_corr, dLradDcont_dT_corr, LradDrays_T, dLradDrays_dT,r0_real8,rn0_real8,.true. ) !< add scalars(i,var_density) as last optional parameter for density dependence
       else
         call atomic_coeff_deuterium(0.5d0*T_real8, Sion_T, dSion_dT, Srec_T, dSrec_dT, LradDcont_T, dLradDcont_dT, &
                                     LradDcont_corr, dLradDcont_dT_corr, LradDrays_T, dLradDrays_dT,r0_real8,rn0_real8,.true. ) 
@@ -1570,8 +1583,8 @@ enddo  ! n_elements
        T_or_Te_0    = T_0
      endif
 
-     if (with_rho) then
-       r0_real8 = scalars(i,var_rho)
+     if (with_density) then
+       r0_real8 = scalars(i,var_density)
      else 
        r0_real8 = 1.d0
      endif
@@ -1692,8 +1705,8 @@ enddo  ! n_elements
 
     do i=1,nnos
 
-      if (with_rho) then
-        r0_real8  = scalars(i,var_rho)
+      if (with_density) then
+        r0_real8  = scalars(i,var_density)
       else 
         r0_real8  = 1.d0
       endif
@@ -1734,7 +1747,7 @@ if (SI_units) then
 
 #ifdef fullmhd
     !===========================================density in 1e20m-3
-    scalars(i,var_rho) = scalars(i,var_rho) * central_density
+    scalars(i,var_density) = scalars(i,var_density) * central_density
     if (with_impurities) then
       scalars(i,i_ne)    = scalars(i,i_ne) * central_density
     end if
@@ -1791,9 +1804,9 @@ if (SI_units) then
       scalars(i,var_zj) = currdens(i) / MU_zero * 1.e-6
     endif
     !============================================density in 1e20m-3
-    if (with_rho) then
-      scalars(i,var_rho)  = scalars(i,var_rho) * central_density
-      r0_tmp = scalars(i,var_rho)
+    if (with_density) then
+      scalars(i,var_density)  = scalars(i,var_density) * central_density
+      r0_tmp = scalars(i,var_density)
     else
       r0_tmp = central_density
     endif
