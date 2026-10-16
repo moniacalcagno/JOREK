@@ -7,6 +7,7 @@ character(len=20), parameter :: rst_file_ind_fmt(2) = (/'(a,i6.6)', '(a,i5.5)'/)
 ! --- Set by import_hdf5_restart when var_order_import is used, to complete the variables afterwards
 logical, allocatable :: var_imported(:)          !< .true. if the variable of the compiled model was read from the restart file
 logical              :: split_T_into_TiTe = .false. !< .true. if the total temperature of the file was stored in T_e and has to be split
+real*8,  allocatable :: lift_floor(:)            !< minimum at the Gaussian points for variables computed during the import (<0: none)
 
 contains
 !> Imports a restart file written out by the routine export_restart.
@@ -34,6 +35,7 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
   logical, optional,            intent(in)              :: use_3D_rtree ! use 3D rtree for stellarator model
  
   ! --- Local parameters
+  integer                                :: ivar
   type (type_bnd_element_list)           :: bnd_elm_list    
   type (type_bnd_node_list)              :: bnd_node_list 
 
@@ -84,6 +86,13 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
       call init_missing_variables(node_list, var_imported, split_T_into_TiTe)
   end if
 #endif
+
+  ! --- Raise the temperatures computed during the import to their minimum at the Gaussian points
+  if ( allocated(lift_floor) ) then
+    do ivar = 1, n_var
+      if ( lift_floor(ivar) >= 0.d0 ) call raise_min_at_gauss_points(node_list, element_list, ivar, lift_floor(ivar))
+    end do
+  end if
   
 end subroutine import_restart
 
@@ -1025,7 +1034,6 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer              :: n_var_order_import
   integer              :: k_rho_drop, n_T_rho, iv, ivar_list(3), ivar_T_rho(3)  ! density dropped: temperatures multiplied by rho
   real*8,  allocatable :: rho_loc(:,:), drho_loc(:,:), tmp_v(:,:), tmp_d(:,:)
-  real*8               :: T_floor, T_rho_min
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
   logical              :: kept, modes_changed, import_3xx_4xx
@@ -1164,6 +1172,9 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   allocate(var_imported(n_var))
   var_imported(:)   = .true.
   split_T_into_TiTe = .false.
+  if (allocated(lift_floor)) deallocate(lift_floor)
+  allocate(lift_floor(n_var))
+  lift_floor(:) = -1.d0
   n_var_order_import = count(len_trim(var_order_import) > 0)
 
   import_3xx_4xx = .false.
@@ -1193,6 +1204,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
           var_map(k) = var_Te
           var_imported(var_Te) = .true.
           split_T_into_TiTe = .true.
+          if ( T_min_neg >= 0.d0 ) lift_floor(var_Te) = 0.5d0 * T_min_neg
           write(*,'(3x,I3,A,A,A)') k, ' -> ', trim(var_order_import(k)), &
                                    ' = split into T_i (input profile) and T_e = T - T_i'
         else
@@ -2547,29 +2559,16 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_x,"t_x",CAT_UNKNOWN)
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
-  ! --- Raise the temperatures computed as rho*T by a constant, so that their smallest n=0 node value
-  ! --- is T_min_neg (T_min_neg/2 for T_i and T_e; a total temperature that is split later is still T here)
+  ! --- The temperatures computed as rho*T are raised after the import (see raise_min_at_gauss_points)
+  ! --- to a minimum of T_min_neg (T_min_neg/2 for T_i and T_e)
   if ( n_T_rho > 0 ) then
     if ( T_min_neg >= 0.d0 ) then
       do iv = 1, n_T_rho
-        T_floor = T_min_neg
-        if ( (ivar_T_rho(iv) == var_Ti) .or. ((ivar_T_rho(iv) == var_Te) .and. (.not. split_T_into_TiTe)) ) T_floor = 0.5d0 * T_min_neg
-        T_rho_min = huge(1.d0)
-        do i = 1, node_list%n_nodes
-          T_rho_min = min(T_rho_min, node_list%node(i)%values(1,1,ivar_T_rho(iv)))
-        end do
-        if ( T_rho_min < T_floor ) then
-          do i = 1, node_list%n_nodes
-            node_list%node(i)%values(1,1,ivar_T_rho(iv)) = node_list%node(i)%values(1,1,ivar_T_rho(iv)) + (T_floor - T_rho_min)
-          end do
-          write(*,*) '  rho*T: smallest n=0 value ', T_rho_min, ' raised to ', T_floor, ' (constant shift of ', &
-                     T_floor - T_rho_min, ')'
-        else
-          write(*,*) '  rho*T: smallest n=0 value ', T_rho_min, ' is not below ', T_floor, ', no shift'
-        end if
+        lift_floor(ivar_T_rho(iv)) = T_min_neg
+        if ( (ivar_T_rho(iv) == var_Ti) .or. (ivar_T_rho(iv) == var_Te) ) lift_floor(ivar_T_rho(iv)) = 0.5d0 * T_min_neg
       end do
     else
-      write(*,*) '  rho*T: T_min_neg < 0, the temperatures are not shifted'
+      write(*,*) '  rho*T: T_min_neg < 0, the temperatures are not raised'
     end if
   end if
 
@@ -2639,6 +2638,63 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
   return
 end subroutine import_hdf5_restart
+
+
+
+!> Raise variable ivar by a constant (added to the n=0 value of all nodes) so that its minimum over
+!! the Gaussian points of all elements and the n_plane toroidal planes is val_min. Nothing is done if
+!! the minimum is already at or above val_min (to 1e-12 relative to the largest absolute value).
+subroutine raise_min_at_gauss_points(node_list, element_list, ivar, val_min)
+
+  use data_structure
+  use mod_parameters,    only: n_tor, n_plane, n_degrees, n_vertex_max, variable_names
+  use gauss,             only: n_gauss
+  use basis_at_gaussian, only: H, HZ
+
+  type(type_node_list),    intent(inout) :: node_list
+  type(type_element_list), intent(in)    :: element_list
+  integer,                 intent(in)    :: ivar
+  real*8,                  intent(in)    :: val_min
+
+  real*8  :: val_h(n_tor,n_gauss,n_gauss), vmin, vmax_abs, v, c, shift
+  integer :: ife, iv, inode, j, in, ms, mt, mp
+
+  vmin     = huge(1.d0)
+  vmax_abs = 0.d0
+  do ife = 1, element_list%n_elements
+    val_h = 0.d0
+    do iv = 1, n_vertex_max
+      inode = element_list%element(ife)%vertex(iv)
+      do j = 1, n_degrees
+        do in = 1, n_tor
+          c = node_list%node(inode)%values(in,j,ivar) * element_list%element(ife)%size(iv,j)
+          val_h(in,:,:) = val_h(in,:,:) + c * H(iv,j,:,:)
+        end do
+      end do
+    end do
+    do mt = 1, n_gauss
+      do ms = 1, n_gauss
+        do mp = 1, n_plane
+          v        = sum(val_h(:,ms,mt) * HZ(:,mp))
+          vmin     = min(vmin, v)
+          vmax_abs = max(vmax_abs, abs(v))
+        end do
+      end do
+    end do
+  end do
+
+  if ( vmin < val_min - 1.d-12 * max(abs(val_min), vmax_abs) ) then   ! (tolerance: no shift for rounding differences)
+    shift = val_min - vmin
+    do inode = 1, node_list%n_nodes
+      node_list%node(inode)%values(1,1,ivar) = node_list%node(inode)%values(1,1,ivar) + shift
+    end do
+    write(*,*) '  ', trim(variable_names(ivar)), ': minimum at the Gaussian points ', vmin, ' raised to ', val_min, &
+               ' (constant shift of ', shift, ')'
+  else
+    write(*,*) '  ', trim(variable_names(ivar)), ': minimum at the Gaussian points ', vmin, ' is not below ', val_min
+  end if
+
+end subroutine raise_min_at_gauss_points
 
 
 
