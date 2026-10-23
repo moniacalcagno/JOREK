@@ -23,6 +23,10 @@ module mod_model_settings
   integer, parameter :: n_mod_ext            = 0 !< this model is not a model family => no extensions
 
   integer, parameter :: n_var    = 10
+  integer, parameter :: n_eq_var = n_var
+  integer, private :: i_var_index
+  integer, dimension(n_var), parameter :: var_index = (/ (i_var_index, i_var_index=1,n_var) /)
+  integer, parameter :: var_rho_frozen = 0 !< no frozen density in this model
   
   integer, parameter :: var_A3   = 1                       ! place of variable psi/mag pot 3               (ps or A3)
   integer, parameter :: var_AR   = 2                       ! place of variable mag pot  1                  (AR)

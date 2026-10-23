@@ -4,6 +4,11 @@ implicit none
 
 character(len=20), parameter :: rst_file_ind_fmt(2) = (/'(a,i6.6)', '(a,i5.5)'/)
 
+! --- Set by import_hdf5_restart when var_order_import is used, to complete the variables afterwards
+logical, allocatable :: var_imported(:)          !< .true. if the variable of the compiled model was read from the restart file
+logical              :: split_T_into_TiTe = .false. !< .true. if the total temperature of the file was stored in T_e and has to be split
+real*8,  allocatable :: lift_floor(:)            !< minimum at the Gaussian points for variables computed during the import (<0: none)
+
 contains
 !> Imports a restart file written out by the routine export_restart.
 
@@ -30,6 +35,7 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
   logical, optional,            intent(in)              :: use_3D_rtree ! use 3D rtree for stellarator model
  
   ! --- Local parameters
+  integer                                :: ivar
   type (type_bnd_element_list)           :: bnd_elm_list    
   type (type_bnd_node_list)              :: bnd_node_list 
 
@@ -38,6 +44,10 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
   
   if ( rst_hdf5 == 0 ) then
     write(*,*) " Restart from BINARY file " // trim(filename) // '.rst'
+    if ( any(len_trim(var_order_import) > 0) ) then
+      write(*,*) 'ERROR: var_order_import is only supported for HDF5 restart files (rst_hdf5 = 1).'
+      stop
+    end if
     if(present(aux_node_list)) then 
       call import_binary_restart(node_list=node_list, element_list=element_list, &
            filename=trim(filename)//'.rst', format_rst=format_rst, error=ierr, &
@@ -68,6 +78,21 @@ subroutine import_restart(node_list, element_list, filename, format_rst, ierr, n
   call update_equil_state(0,node_list, element_list, bnd_elm_list, xpoint, xcase)
   write(*,*) " "
   write(*,*) " The equilibrium state has been updated "
+  
+#if JOREK_MODEL == 600
+  ! --- Complete the variables that were not in the restart file (see var_order_import)
+  if ( allocated(var_imported) ) then
+    if ( (.not. all(var_imported)) .or. split_T_into_TiTe ) &
+      call init_missing_variables(node_list, var_imported, split_T_into_TiTe)
+  end if
+#endif
+
+  ! --- Raise the temperatures computed during the import to their minimum at the Gaussian points
+  if ( allocated(lift_floor) ) then
+    do ivar = 1, n_var
+      if ( lift_floor(ivar) >= 0.d0 ) call raise_min_at_gauss_points(node_list, element_list, ivar, lift_floor(ivar))
+    end do
+  end if
   
 end subroutine import_restart
 
@@ -962,7 +987,7 @@ end subroutine import_binary_restart
 
 !
 ! Import an HDF5 restart file
-subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, error, no_perturbations, aux_node_list, use_3D_rtree)
+subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, error, no_perturbations, aux_node_list, use_3D_rtree, field_import)
 
 #include "version.h"
 
@@ -989,6 +1014,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer,                      intent(out)             :: error
   logical, optional,            intent(in)              :: no_perturbations ! don't initialize new harmonics
   logical, optional,            intent(in)              :: use_3D_rtree ! whether to use 3D rtree for element search (if false, use 2D rtree)
+  logical, optional,            intent(in)              :: field_import ! allow importing fields from another equation system
   
   ! --- Perturbation-Import variables
   type (type_node_list)   , pointer	:: node_list_perturbation
@@ -999,14 +1025,19 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   logical, parameter   			:: import_perturbation = .false.
 
   ! --- Local variables
-  integer              :: i, j, m, k, n_tor_tmp, n_coord_tor_tmp, jorek_model_tmp, n_var_tmp, n_order_tmp, n_period_tmp, rst_hdf5_version_tmp, i_p, p_begin
+  integer              :: i, j, m, k, n_tor_tmp, n_coord_tor_tmp, jorek_model_tmp, n_values_file, n_order_tmp, n_period_tmp, rst_hdf5_version_tmp, i_p, p_begin
   integer              :: n_plane_tmp, n_vertex_max_tmp, n_nodes_max_tmp, n_elements_max_tmp,n_boundary_max_tmp, n_nodes_tmp, n_dof_tmp
-  integer              :: n_pieces_max_tmp, n_degrees_tmp, nref_max_tmp, n_ref_list_tmp, n_new_modes
+  integer              :: n_pieces_max_tmp, n_degrees_tmp, nref_max_tmp, n_ref_list_tmp, n_new_modes, n_values_import, index_total
   real*8               :: growth_mag, growth_kin, amplitude
   integer, allocatable :: mode_tmp(:), new_mode(:)
+  integer, allocatable :: var_map(:)          ! variable index in the compiled model for each variable in the file (0: dropped)
+  integer, allocatable :: var_src(:), var_dst(:) ! file and compiled-model indices of the variables that are imported
+  integer              :: n_var_order_import
+  integer              :: k_rho_drop, n_T_rho, iv, ivar_list(3), ivar_T_rho(3)  ! density dropped: temperatures multiplied by rho
+  real*8,  allocatable :: rho_loc(:,:), drho_loc(:,:), tmp_v(:,:), tmp_d(:,:)
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:)
   character*50         :: version_control, version_control_tmp, t_treat_axis
-  logical              :: kept, modes_changed, import_3xx_4xx
+  logical              :: kept, modes_changed, import_3xx_4xx, do_field_import
   
 #ifdef USE_HDF5
   integer(HID_T)     :: file_id, datatype, dataset
@@ -1096,6 +1127,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
   no_pert = .false.
   if ( present(no_perturbations) ) no_pert = no_perturbations
+  do_field_import = .false.
+  if ( present(field_import) ) do_field_import = field_import
 
 #endif
   error = 0
@@ -1130,18 +1163,126 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   version_control = trim(adjustl(RCS_VERSION))
 
   call HDF5_integer_reading(file_id,jorek_model_tmp,"jorek_model")
-  call HDF5_integer_reading(file_id,n_var_tmp,"n_var")
+  call HDF5_integer_reading(file_id,n_values_file,"n_var")
   if (n_aux_var == 0) call HDF5_integer_reading(file_id,n_aux_var,"n_aux_var") ! for diagnostic purposes
   
+  ! --- By default, variable k of the file is variable k of the compiled model
+  allocate(var_map(n_values_file))
+  do k = 1, n_values_file
+    var_map(k) = k
+  end do
+  if (allocated(var_imported)) deallocate(var_imported)
+  allocate(var_imported(n_eq_var))
+  var_imported(:)   = .true.
+  split_T_into_TiTe = .false.
+  if (allocated(lift_floor)) deallocate(lift_floor)
+  allocate(lift_floor(n_var))
+  lift_floor(:) = -1.d0
+  n_var_order_import = count(len_trim(var_order_import) > 0)
+
   import_3xx_4xx = .false.
-  if ( (jorek_model >= 400) .and. (jorek_model <= 499) .and. (jorek_model_tmp >= 300) .and. (jorek_model_tmp <= 399) ) then
+  if ( n_var_order_import > 0 ) then
+    ! --- Import from another model, with the variable order of the file given by var_order_import
+    write(*,*) 'WARNING: Restarting a JOREK model ', jorek_model_tmp, ' simulation with model ', jorek_model, &
+               ' using var_order_import.'
+    if ( (n_var_order_import /= n_values_file) .or. any(len_trim(var_order_import(1:min(n_values_file,n_var_import_max))) == 0) ) then
+      write(*,*) 'ERROR: var_order_import must list exactly the n_var variables of the restart file, in order.'
+      write(*,*) '  n_var in restart file         = ', n_values_file
+      write(*,*) '  entries in var_order_import   = ', n_var_order_import
+      stop
+    end if
+    do k = 1, n_values_file
+      var_map(k) = variable_index_from_name(var_order_import(k))
+      if ( var_map(k) < 0 ) then
+        write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), '" is not a known variable name.'
+        stop
+      end if
+    end do
+    var_imported(:) = .false.
+    do k = 1, n_values_file
+      if ( var_map(k) == 0 ) then
+        if ( (trim(variable_canonical_name(var_order_import(k))) == 'T') .and. (var_Ti > 0) .and. (var_Te > 0) &
+             .and. (.not. any(var_map == var_Ti)) .and. (.not. any(var_map == var_Te)) ) then
+          ! --- Total temperature into a model with T_i and T_e: stored in T_e, split after the import
+          var_map(k) = var_Te
+          var_imported(var_Te) = .true.
+          split_T_into_TiTe = .true.
+          if ( T_min_neg >= 0.d0 ) lift_floor(var_Te) = 0.5d0 * T_min_neg
+          write(*,'(3x,I3,A,A,A)') k, ' -> ', trim(var_order_import(k)), &
+                                   ' = split into T_i (input profile) and T_e = T - T_i'
+        else
+          write(*,'(3x,I3,A,A,A)') k, ' -> ', trim(var_order_import(k)), &
+                                   ' : WARNING, not a variable of the compiled model, dropped'
+        end if
+      else
+        if ( any(var_map(1:k-1) == var_map(k)) ) then
+          write(*,*) 'ERROR: var_order_import(', k, ') = "', trim(var_order_import(k)), '" is listed twice.'
+          stop
+        end if
+        var_imported(var_map(k)) = .true.
+        write(*,'(3x,I3,A,A,A,I3)') k, ' -> ', trim(var_order_import(k)), ' = variable ', var_map(k)
+      end if
+    end do
+    do k = 1, n_eq_var
+      if ( .not. var_imported(k) ) write(*,*) '  WARNING: variable ', trim(variable_names(k)), &
+                                              ' is not in the restart file (initialised after the import).'
+    end do
+  else if ( (jorek_model >= 400) .and. (jorek_model <= 499) .and. (jorek_model_tmp >= 300) .and. (jorek_model_tmp <= 399) ) then
     import_3xx_4xx = .true. ! Import a JOREK model 3XX restart file into a 4XX binary
     write(*,*) 'WARNING: Restarting a JOREK model 3XX simulation with model 4XX.'
-  else if ( n_var /= n_var_tmp ) then
+  else if ( do_field_import ) then
+    if ( n_values_file < n_eq_var ) then
+      write(*,*) 'ERROR: Insufficient stored fields for field import.'
+      write(*,*) '  stored fields in file       = ', n_values_file
+      write(*,*) '  required equilibrium fields = ', n_eq_var
+      write(*,*) '  var_index mapping           = ', var_index
+      stop
+    endif
+    do k=1,n_var
+      if ( (var_index(k) < 1) .or. (var_index(k) > n_values_file) ) then
+        write(*,*) 'ERROR: Invalid var_index mapping for field import.'
+        write(*,*) '  stored fields in file       = ', n_values_file
+        write(*,*) '  required equilibrium fields = ', n_eq_var
+        write(*,*) '  var_index mapping           = ', var_index
+        stop
+      endif
+    enddo
+  else if ( n_eq_var /= n_values_file ) then
     write(*,*) 'ERROR: The number of variables in the restart file and the compiled JOREK binary does not agree.'
     write(*,*) '  Restarting normally works only with the same JOREK model.'
     write(*,*) '  As an exception, importing a 3XX restart file into model 4XX has been implemented.'
     stop
+  end if
+  n_values_import = n_values_file
+  if (import_3xx_4xx) n_values_import = n_var
+  if (n_var_order_import > 0) n_values_import = n_eq_var   ! all fields stored by the compiled model
+  allocate(var_src(count(var_map > 0)), var_dst(count(var_map > 0)))
+  var_src(:) = pack( (/ (k, k=1,n_values_file) /), var_map > 0 )
+  var_dst(:) = pack( var_map, var_map > 0 )
+
+  ! --- Density in the file but not in the compiled model (which then uses rho = 1):
+  ! --- multiply the imported temperatures by rho to keep the pressure
+  k_rho_drop = 0
+  n_T_rho    = 0
+  if ( n_var_order_import > 0 ) then
+    do k = 1, n_values_file
+      if ( (var_map(k) == 0) .and. (trim(variable_canonical_name(var_order_import(k))) == 'rho') ) k_rho_drop = k
+    end do
+  end if
+  if ( k_rho_drop > 0 ) then
+    ivar_list = (/ var_T, var_Ti, var_Te /)
+    do iv = 1, 3
+      if ( ivar_list(iv) > 0 ) then
+        if ( var_imported(ivar_list(iv)) ) then
+          n_T_rho = n_T_rho + 1
+          ivar_T_rho(n_T_rho) = ivar_list(iv)
+        end if
+      end if
+    end do
+  end if
+  if ( n_T_rho > 0 ) then
+    write(*,*) '  The compiled model has no density (rho = 1): to keep the pressure, the imported'
+    write(*,*) '  temperatures are multiplied by rho of the file (linearised in the n/=0 harmonics).'
   end if
   call HDF5_integer_reading(file_id,n_order_tmp,"n_order")
   call HDF5_integer_reading(file_id,n_tor_tmp, "n_tor")
@@ -1159,6 +1300,12 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call HDF5_integer_reading(file_id,n_boundary_max_tmp, "n_boundary_max")
   call HDF5_integer_reading(file_id,n_pieces_max_tmp, "n_pieces_max")
   call HDF5_integer_reading(file_id,n_degrees_tmp, "n_degrees")
+  if ( do_field_import .and. (n_degrees_tmp /= n_degrees) ) then
+    write(*,*) 'ERROR: Polynomial order mismatch during field import.'
+    write(*,*) '  stored derivatives in file = ', n_degrees_tmp
+    write(*,*) '  required derivatives       = ', n_degrees
+    stop
+  endif
   call HDF5_integer_reading(file_id,nref_max_tmp, "nref_max")
   call HDF5_integer_reading(file_id,n_ref_list_tmp, "n_ref_list")
 
@@ -1215,7 +1362,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call HDF5_integer_reading(file_id,element_list%n_elements,"n_elements")
 
   ! initialise and allocate node_list
-  call init_node_list(node_list, n_nodes_tmp, n_dof_tmp, n_var)
+  call init_node_list(node_list, n_nodes_tmp, n_dof_tmp, n_values_import)
 
 
   aux_values_read = .false.
@@ -1234,8 +1381,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
   ! -> Allocate temporary arrays 
   call tr_allocate(t_x,     1,node_list%n_nodes,1,n_coord_tor_tmp,1,n_degrees_tmp,1,n_dim,         "node_list%x",     CAT_UNKNOWN)
-  call tr_allocate(t_values,1,node_list%n_nodes,1,      n_tor_tmp,1,n_degrees_tmp,1,n_var_tmp, "node_list%values",CAT_UNKNOWN)
-  call tr_allocate(t_deltas,1,node_list%n_nodes,1,      n_tor_tmp,1,n_degrees_tmp,1,n_var_tmp, "node_list%deltas",CAT_UNKNOWN)
+  call tr_allocate(t_values,1,node_list%n_nodes,1,      n_tor_tmp,1,n_degrees_tmp,1,n_values_file, "node_list%values",CAT_UNKNOWN)
+  call tr_allocate(t_deltas,1,node_list%n_nodes,1,      n_tor_tmp,1,n_degrees_tmp,1,n_values_file, "node_list%deltas",CAT_UNKNOWN)
   if(aux_values_read) then
     call tr_allocate(t_aux_values,1,aux_node_list%n_nodes,1,n_tor_tmp,1,n_degrees_tmp,1,n_aux_var, "aux_node_list%values",CAT_UNKNOWN)
   endif
@@ -1400,18 +1547,53 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
                 
 
-              node_list%node(i)%values(k,j,1:n_var_tmp)   = t_values(i,m,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k,j,1:n_var_tmp)   = t_deltas(i,m,j,1:n_var_tmp)
+              node_list%node(i)%values(k,j,var_dst)   = t_values(i,m,j,var_src)
+              node_list%node(i)%deltas(k,j,var_dst)   = t_deltas(i,m,j,var_src)
             else
-              node_list%node(i)%values(k-1,j,1:n_var_tmp) = t_values(i,m-1,j,1:n_var_tmp)
-              node_list%node(i)%deltas(k-1,j,1:n_var_tmp) = t_deltas(i,m-1,j,1:n_var_tmp) 
-              node_list%node(i)%values(k,j,1:n_var_tmp)   = t_values(i,m,j,1:n_var_tmp) 
-              node_list%node(i)%deltas(k,j,1:n_var_tmp)   = t_deltas(i,m,j,1:n_var_tmp)
+              node_list%node(i)%values(k-1,j,var_dst) = t_values(i,m-1,j,var_src)
+              node_list%node(i)%deltas(k-1,j,var_dst) = t_deltas(i,m-1,j,var_src)
+              node_list%node(i)%values(k,j,var_dst)   = t_values(i,m,j,var_src)
+              node_list%node(i)%deltas(k,j,var_dst)   = t_deltas(i,m,j,var_src)
             end if
           end if
         enddo
       end do
     end do
+
+    ! --- The frozen density is not evolved: no time increments
+    if ( (var_rho_frozen > 0) .and. (var_rho_frozen <= n_values_import) ) then
+      node_list%node(i)%deltas(:,:,max(var_rho_frozen,1)) = 0.d0
+    end if
+
+    if ( n_T_rho > 0 ) then
+      if ( n_degrees_tmp /= 4 ) then
+        write(*,*) 'ERROR: multiplying the temperatures by rho is only implemented for n_order = 3.'
+        stop
+      end if
+      if ( .not. allocated(rho_loc) ) allocate(rho_loc(n_tor,n_degrees_tmp), drho_loc(n_tor,n_degrees_tmp), &
+                                               tmp_v(n_tor,n_degrees_tmp),   tmp_d(n_tor,n_degrees_tmp))
+      rho_loc  = 0.d0
+      drho_loc = 0.d0
+      do m=1,n_tor_tmp,2
+        do k=1, n_tor,2
+          if (mode_tmp(m) .eq. mode(k)) then
+            if ((m .eq. 1) .and. (k.eq.1)) then
+              rho_loc(k,:)      = t_values(i,m,1:n_degrees_tmp,k_rho_drop)
+              drho_loc(k,:)     = t_deltas(i,m,1:n_degrees_tmp,k_rho_drop)
+            else
+              rho_loc(k-1:k,:)  = t_values(i,m-1:m,1:n_degrees_tmp,k_rho_drop)
+              drho_loc(k-1:k,:) = t_deltas(i,m-1:m,1:n_degrees_tmp,k_rho_drop)
+            end if
+          end if
+        end do
+      end do
+      do iv = 1, n_T_rho
+        tmp_v = node_list%node(i)%values(:,:,ivar_T_rho(iv))
+        tmp_d = node_list%node(i)%deltas(:,:,ivar_T_rho(iv))
+        node_list%node(i)%values(:,:,ivar_T_rho(iv)) = linearised_product(rho_loc, tmp_v)
+        node_list%node(i)%deltas(:,:,ivar_T_rho(iv)) = linearised_product(rho_loc, tmp_d) + linearised_product(drho_loc, tmp_v)
+      end do
+    end if
 
     if(aux_values_read) then
      aux_node_list%node(i)%values = 0.d0
@@ -1499,6 +1681,14 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
        node_list%node(i)%constrained = .false.
     end if
   end do
+
+  if (do_field_import) then
+    index_total = -1
+    do i=1,node_list%n_nodes
+      index_total = max(index_total,maxval(node_list%node(i)%index))
+    enddo
+    node_list%n_dof = index_total * n_tor * n_var
+  endif
 
   call HDF5_array2D_reading_int(file_id,t_vertex,      'vertex')
   call HDF5_array2D_reading_int(file_id,t_neighbours,  'neighbours')
@@ -2368,7 +2558,10 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
  
   ! --- initialise new harmonics (only density and temperature, to be improved)
   n_new_modes = sum(new_mode(1:n_tor))
-  if ( (.not. no_pert) .and. (n_new_modes .gt. 0) ) then
+  if ( do_field_import .and. (n_new_modes .gt. 0) ) then
+    write(*,*) 'Warning:', n_new_modes, ' new field-import modes remain zero'
+  endif
+  if ( (.not. no_pert) .and. (.not. do_field_import) .and. (n_new_modes .gt. 0) ) then
     write(*,*), 'Warning:', n_new_modes, ' new modes initialized to noise level' 
     ! --- Using an already computed mode
     if ( (import_perturbation) .and. (n_tor .gt. 1) ) then
@@ -2411,6 +2604,21 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_x,"t_x",CAT_UNKNOWN)
   call tr_deallocate(t_values,"t_values",CAT_UNKNOWN)
   call tr_deallocate(t_deltas,"t_deltas",CAT_UNKNOWN)
+  ! --- The temperatures computed as rho*T are raised after the import (see raise_min_at_gauss_points)
+  ! --- to a minimum of T_min_neg (T_min_neg/2 for T_i and T_e)
+  if ( n_T_rho > 0 ) then
+    if ( T_min_neg >= 0.d0 ) then
+      do iv = 1, n_T_rho
+        lift_floor(ivar_T_rho(iv)) = T_min_neg
+        if ( (ivar_T_rho(iv) == var_Ti) .or. (ivar_T_rho(iv) == var_Te) ) lift_floor(ivar_T_rho(iv)) = 0.5d0 * T_min_neg
+      end do
+    else
+      write(*,*) '  rho*T: T_min_neg < 0, the temperatures are not raised'
+    end if
+  end if
+
+  deallocate(var_map, var_src, var_dst)
+  if ( allocated(rho_loc) ) deallocate(rho_loc, drho_loc, tmp_v, tmp_d)
   if(aux_values_read) then
     call tr_deallocate(t_aux_values,"t_aux_values",CAT_UNKNOWN)
   endif
@@ -2475,6 +2683,92 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
 
   return
 end subroutine import_hdf5_restart
+
+
+
+!> Raise variable ivar by a constant (added to the n=0 value of all nodes) so that its minimum over
+!! the Gaussian points of all elements and the n_plane toroidal planes is val_min. Nothing is done if
+!! the minimum is already at or above val_min (to 1e-12 relative to the largest absolute value).
+subroutine raise_min_at_gauss_points(node_list, element_list, ivar, val_min)
+
+  use data_structure
+  use mod_parameters,    only: n_tor, n_plane, n_degrees, n_vertex_max, variable_names
+  use gauss,             only: n_gauss
+  use basis_at_gaussian, only: H, HZ
+
+  type(type_node_list),    intent(inout) :: node_list
+  type(type_element_list), intent(in)    :: element_list
+  integer,                 intent(in)    :: ivar
+  real*8,                  intent(in)    :: val_min
+
+  real*8  :: val_h(n_tor,n_gauss,n_gauss), vmin, vmax_abs, v, c, shift
+  integer :: ife, iv, inode, j, in, ms, mt, mp
+
+  vmin     = huge(1.d0)
+  vmax_abs = 0.d0
+  do ife = 1, element_list%n_elements
+    val_h = 0.d0
+    do iv = 1, n_vertex_max
+      inode = element_list%element(ife)%vertex(iv)
+      do j = 1, n_degrees
+        do in = 1, n_tor
+          c = node_list%node(inode)%values(in,j,ivar) * element_list%element(ife)%size(iv,j)
+          val_h(in,:,:) = val_h(in,:,:) + c * H(iv,j,:,:)
+        end do
+      end do
+    end do
+    do mt = 1, n_gauss
+      do ms = 1, n_gauss
+        do mp = 1, n_plane
+          v        = sum(val_h(:,ms,mt) * HZ(:,mp))
+          vmin     = min(vmin, v)
+          vmax_abs = max(vmax_abs, abs(v))
+        end do
+      end do
+    end do
+  end do
+
+  if ( vmin < val_min - 1.d-12 * max(abs(val_min), vmax_abs) ) then   ! (tolerance: no shift for rounding differences)
+    shift = val_min - vmin
+    do inode = 1, node_list%n_nodes
+      node_list%node(inode)%values(1,1,ivar) = node_list%node(inode)%values(1,1,ivar) + shift
+    end do
+    write(*,*) '  ', trim(variable_names(ivar)), ': minimum at the Gaussian points ', vmin, ' raised to ', val_min, &
+               ' (constant shift of ', shift, ')'
+  else
+    write(*,*) '  ', trim(variable_names(ivar)), ': minimum at the Gaussian points ', vmin, ' is not below ', val_min
+  end if
+
+end subroutine raise_min_at_gauss_points
+
+
+
+!> Product of two fields given at one node as (harmonic, degree), for n_order = 3 (4 degrees).
+!! The n=0 harmonic is a0*b0; the n/=0 harmonics are linearised: a0*bn + an*b0.
+!! The degrees (value, d/ds, d/dt, d2/dsdt) follow the product rule.
+pure function linearised_product(a, b) result(c)
+
+  real*8, intent(in) :: a(:,:), b(:,:)
+  real*8             :: c(size(a,1),size(a,2))
+  integer            :: k
+
+  c(1,:) = node_product(a(1,:), b(1,:))
+  do k = 2, size(a,1)
+    c(k,:) = node_product(a(1,:), b(k,:)) + node_product(a(k,:), b(1,:))
+  end do
+
+contains
+
+  pure function node_product(f, g) result(h)
+    real*8, intent(in) :: f(4), g(4)
+    real*8             :: h(4)
+    h(1) = f(1)*g(1)
+    h(2) = f(1)*g(2) + f(2)*g(1)
+    h(3) = f(1)*g(3) + f(3)*g(1)
+    h(4) = f(1)*g(4) + f(2)*g(3) + f(3)*g(2) + f(4)*g(1)
+  end function node_product
+
+end function linearised_product
 
 
 ! Import an HDF5 restart file (aux_node_list) - used only for some diagnostics purpose

@@ -25,6 +25,7 @@ namelist /in1/  tstep, nstep, tstep_n, nstep_n,                     &
                 keep_current_psin_sig, keep_current_z_sig,          &
                 eta, visco, visco_par, visco_par_par,               &
                 restart, rst_format, regrid, bootstrap, write_ps,   &
+                var_order_import,                                   &
                 bootstrap_psin_cutoff,                              &
                 regrid_from_rz, force_horizontal_Xline,             &
                 n_R, n_Z, n_radial, n_pol, n_tht, n_flux,           &

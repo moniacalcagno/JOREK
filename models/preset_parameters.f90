@@ -58,6 +58,7 @@ subroutine preset_parameters
 
   n_tor_restart= 0
   restart      = .false.
+  var_order_import(:) = ''
   import_equil = .false.
   regrid       = .false.
   regrid_from_rz = .false.

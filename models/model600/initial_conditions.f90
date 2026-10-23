@@ -36,6 +36,15 @@ if (my_id .eq. 0) then
   write(*,*) '***************************************'
 endif
 
+! --- The frozen density is only filled when importing a restart file
+if ( var_rho_frozen > 0 ) then
+  if (my_id .eq. 0) then
+    write(*,*) 'ERROR: with_frozen_rho needs a restart file (restart = .t.); it is not supported for new runs.'
+    write(*,*) '       Import a restart file that contains rho, e.g. with var_order_import.'
+  endif
+  stop
+endif
+
 ! --- This old projection method should be replaced by a direct solve on the elements
 ! --- It is much cleaner and more generic
 if ( (my_id .eq. 0) .and. (n_order .le. 3) ) then

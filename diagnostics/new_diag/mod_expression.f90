@@ -61,7 +61,7 @@ module mod_expression
   !> Coordinate expressions evaluate to this value for positions outside the JOREK domain.
   !! This value may be changed by programs using the new_diag package!
   real*8, save :: expr_outside_coord = 0.d0
-  
+  integer      :: n_vars,var_density
   
   
   
@@ -102,6 +102,13 @@ module mod_expression
     character(LEN_NAME)    :: s1
     character(LEN_DESCR)     :: s2
     integer         :: i
+
+    if (with_rho) var_density=var_rho
+    n_vars = n_var
+    if (with_frozen_rho) then
+      n_vars=n_vars+1
+      var_density=var_rho_frozen
+    endif
     
     exprs_all%n_expr     = 0
     exprs_all_int%n_expr = 0
@@ -153,7 +160,7 @@ module mod_expression
     call add(exprs_all, 'nimp        ', 'Impurity Density                                      ')
     call add(exprs_all, 'Z_eff       ', 'Effective charge of all species                       ')
 #endif
-    do i = 1,n_var
+    do i = 1,n_vars
       write(s1,'(a,i2.2)') 'aux', i
       write(s2,'(a,i2.2)') 'Particle projection #', i
       call add(exprs_all, s1, s2)
@@ -619,8 +626,8 @@ module mod_expression
     real*8 :: FFprime_loc, Jpol, JpolR, JpolZ, Btot, Jpar, Jpar_ionsat, fact_jsat, Bnorm, Btan, Jtor
     real*8 :: p_prime_loc
     real*8 :: nmlR, nmlZ, theta_geo, VR, VZ, V_phi, Vpar_tot, VperpR, VperpZ
-    real*8 :: hh, hh_s, hh_t, hh_ss, hh_tt, hh_st, hhz, hhz_p, hhz_pp, sz, vv(0:n_var), va(n_var), aux(20)
-    real*8 :: delta_g(n_var), delta_s(n_var), delta_t(n_var)
+    real*8 :: hh, hh_s, hh_t, hh_ss, hh_tt, hh_st, hhz, hhz_p, hhz_pp, sz, vv(0:n_vars), va(n_vars), aux(20)
+    real*8 :: delta_g(n_vars), delta_s(n_vars), delta_t(n_vars)
     ! --- Fluxes
     real*8  ::  ZKpar_flux, ZKipar_flux, ZKepar_flux, ZKpar_flux_norm, ZKipar_flux_norm, ZKepar_flux_norm,   &
                 ZKperp_flux_norm, ZKiperp_flux_norm, ZKeperp_flux_norm,                                      &
@@ -852,12 +859,12 @@ module mod_expression
                 hhz_p  = HZ_p (i_tor)
                 hhz_pp = HZ_pp(i_tor)
                 vv(:) = 0.d0
-                vv(1:n_var) = nodes(i)%values(i_tor,j,:)
+                vv(1:n_vars) = nodes(i)%values(i_tor,j,:)
                 va(:) = 0.d0
                 n_aux = 0
                 if (export_aux_node_list .and. allocated(aux_node_list%node)) then
                   if (allocated(aux_nodes(i)%values)) then
-                    n_aux = min(n_var, size(aux_nodes(i)%values, 3))
+                    n_aux = min(n_vars, size(aux_nodes(i)%values, 3))
                     if (n_aux > 0) va(1:n_aux) = aux_nodes(i)%values(i_tor,j,1:n_aux)
                   endif
                 endif
@@ -903,14 +910,14 @@ module mod_expression
                 w0_pp    = w0_pp    + vv(var_w) * sz * hh    * hhz_pp
                 
                 ! --- Density
-                r0       = r0       + vv(var_rho) * sz * hh    * hhz
-                r0_s     = r0_s     + vv(var_rho) * sz * hh_s  * hhz
-                r0_t     = r0_t     + vv(var_rho) * sz * hh_t  * hhz
-                r0_ss    = r0_ss    + vv(var_rho) * sz * hh_ss * hhz
-                r0_tt    = r0_tt    + vv(var_rho) * sz * hh_tt * hhz
-                r0_st    = r0_st    + vv(var_rho) * sz * hh_st * hhz
-                r0_p     = r0_p     + vv(var_rho) * sz * hh    * hhz_p
-                r0_pp    = r0_pp    + vv(var_rho) * sz * hh    * hhz_pp
+                r0       = r0       + vv(var_density) * sz * hh    * hhz
+                r0_s     = r0_s     + vv(var_density) * sz * hh_s  * hhz
+                r0_t     = r0_t     + vv(var_density) * sz * hh_t  * hhz
+                r0_ss    = r0_ss    + vv(var_density) * sz * hh_ss * hhz
+                r0_tt    = r0_tt    + vv(var_density) * sz * hh_tt * hhz
+                r0_st    = r0_st    + vv(var_density) * sz * hh_st * hhz
+                r0_p     = r0_p     + vv(var_density) * sz * hh    * hhz_p
+                r0_pp    = r0_pp    + vv(var_density) * sz * hh    * hhz_pp
                 
                 ! --- Ion temperature
                 Ti0       = Ti0       + ( vv(var_Ti) + vv(var_T)/2.d0 ) * sz * hh    * hhz
@@ -1015,7 +1022,7 @@ module mod_expression
 
 
                 ! --- Deltas
-                do k = 1, n_var
+                do k = 1, n_vars
                   delta_g(k) = delta_g(k) + nodes(i)%deltas(i_tor,j,k) * sz * hh    * hhz
                   delta_s(k) = delta_s(k) + nodes(i)%deltas(i_tor,j,k) * sz * hh_s  * hhz
                   delta_t(k) = delta_t(k) + nodes(i)%deltas(i_tor,j,k) * sz * hh_t  * hhz
@@ -1025,7 +1032,7 @@ module mod_expression
             end do
           end do
 
-          if (.not. with_rho) then
+          if ((.not. with_rho).and.(.not. with_frozen_rho)) then
             r0       = 1.d0
             r0_s     = 0.d0
             r0_t     = 0.d0

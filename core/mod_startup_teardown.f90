@@ -162,7 +162,7 @@ subroutine sanity_checks(my_id, n_mpi, mpi_required, mpi_provided)
   integer :: mpi_required, mpi_provided
 
   ! Check for a non-flat density profile when density is not evolved
-  if (.not. with_rho) call check_flat_density_profile(my_id)
+  if ((.not. with_rho) .and. (.not. with_frozen_rho)) call check_flat_density_profile(my_id)
 
   ! WARNING for axis treatment
   if(treat_axis .and. (fix_axis_nodes .or. force_central_node))then

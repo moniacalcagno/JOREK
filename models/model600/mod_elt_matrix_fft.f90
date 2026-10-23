@@ -240,9 +240,9 @@ real*8, dimension(DIM1, DIM2, DIM2) :: ELM_pnn
 real*8, dimension(n_gauss,n_gauss)    :: x_g, x_s, x_t, x_ss, x_st, x_tt
 real*8, dimension(n_gauss,n_gauss)    :: y_g, y_s, y_t, y_ss, y_st, y_tt
 
-real*8, dimension(n_plane,n_var,n_gauss,n_gauss) :: eq_g, eq_s, eq_t, eq_p, eq_ss, eq_st, eq_tt
-real*8, dimension(n_plane,n_var,n_gauss,n_gauss) :: eq_spp, eq_tpp
-real*8, dimension(n_plane,n_var,n_gauss,n_gauss) :: delta_g, delta_s, delta_t
+real*8, dimension(n_plane,n_eq_var,n_gauss,n_gauss) :: eq_g, eq_s, eq_t, eq_p, eq_ss, eq_st, eq_tt
+real*8, dimension(n_plane,n_eq_var,n_gauss,n_gauss) :: eq_spp, eq_tpp
+real*8, dimension(n_plane,n_eq_var,n_gauss,n_gauss) :: delta_g, delta_s, delta_t
 real*8, dimension(n_plane,n_aux_var,n_gauss,n_gauss) :: eq_aux_g, eq_aux_s, eq_aux_t, eq_aux_p ! make allocatable?
 
 real*8, dimension(n_tor,n_plane) :: HHZ, HHZ_p, HHZ_pp
@@ -395,7 +395,7 @@ do i=1,n_vertex_max
 
     do ms=1, n_gauss
       do mt=1, n_gauss
-        do k=1,n_var
+        do k=1,n_eq_var
 
           do in=1,n_tor
             do mp=1,n_plane
@@ -589,9 +589,25 @@ do i=1,n_vertex_max
             r0_tt = eq_tt(mp,var_rho,ms,mt)
             delta_rho_g = delta_g(mp,var_rho,ms,mt) 
             delta_rho_s = delta_s(mp,var_rho,ms,mt) 
-            delta_rho_t = delta_t(mp,var_rho,ms,mt) 
+            delta_rho_t = delta_t(mp,var_rho,ms,mt)
+          else if (var_rho_frozen > 0) then
+            ! --- Frozen density (with_frozen_rho): stored at the nodes, not evolved
+            r0    = eq_g(mp,var_rho_frozen,ms,mt)
+            r0_corr = corr_neg_dens(r0)
+            dr0_corr_dn = dcorr_neg_dens_drho(r0)
+            r0_x  = (   y_t(ms,mt) * eq_s(mp,var_rho_frozen,ms,mt) - y_s(ms,mt) * eq_t(mp,var_rho_frozen,ms,mt) ) / xjac
+            r0_y  = ( - x_t(ms,mt) * eq_s(mp,var_rho_frozen,ms,mt) + x_s(ms,mt) * eq_t(mp,var_rho_frozen,ms,mt) ) / xjac
+            r0_p  = eq_p(mp,var_rho_frozen,ms,mt)
+            r0_s  = eq_s(mp,var_rho_frozen,ms,mt)
+            r0_t  = eq_t(mp,var_rho_frozen,ms,mt)
+            r0_ss = eq_ss(mp,var_rho_frozen,ms,mt)
+            r0_st = eq_st(mp,var_rho_frozen,ms,mt)
+            r0_tt = eq_tt(mp,var_rho_frozen,ms,mt)
+            delta_rho_g = 0.d0
+            delta_rho_s = 0.d0
+            delta_rho_t = 0.d0
           else
-            r0    = 1.d0 
+            r0    = 1.d0
             r0_corr = 1.d0
             dr0_corr_dn = 1.d0
             r0_x  = 0.d0 
